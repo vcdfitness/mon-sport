@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mon Sport & Nutrition</title>
+<meta name="theme-color" content="#FFF5F8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Mon Sport">
+<meta name="robots" content="noindex, nofollow">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Quicksand:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<main id="app"><div class="empty">Chargement…</div></main>
+<div id="timer"></div>
+<nav id="nav" class="nav" aria-label="Navigation principale"></nav>
+<div id="sheet"></div>
+<noscript>Active JavaScript pour utiliser l'application.</noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
+
+MON SPORT & NUTRITION — version 1.0.0 (partie séances)
+
+Ce dossier contient toute l'application. Il ne contient aucune donnée personnelle :
+tes séances, vidéos et records sont enregistrés uniquement sur ton iPhone.
+
+MISE EN LIGNE (GitHub Pages, gratuit)
+1. Crée un compte sur https://github.com
+2. Bouton « + » en haut à droite > New repository > nom : mon-sport > Public > Create repository
+3. Lien « uploading an existing file » > glisse TOUT le contenu de ce dossier
+   (index.html, sw.js, manifest.webmanifest, LISEZMOI.txt et les dossiers css, js, icons) > Commit changes
+4. Settings > Pages > Source : Deploy from a branch > Branch : main, dossier / (root) > Save
+5. Après 1 à 2 minutes, l'adresse s'affiche : https://TON-PSEUDO.github.io/mon-sport/
+
+INSTALLATION SUR L'IPHONE
+Ouvre l'adresse dans Safari > bouton Partager > « Sur l'écran d'accueil » > Ajouter.
+Utilise toujours l'icône de l'écran d'accueil : c'est là que tes données sont rangées.
+
+AJOUTER UNE VIDÉO
+Dans Instagram, TikTok ou YouTube : Partager > Copier le lien.
+Ouvre l'app > « Coller un lien ».
+
+SAUVEGARDE
+Réglages (roue dentée sur l'accueil) > Exporter une sauvegarde > Enregistrer dans Fichiers.
+À faire environ une fois par semaine.
+
+MISE À JOUR DE L'APP
+Remplace les fichiers modifiés dans le dépôt GitHub (Add file > Upload files).
+Tes données sur le téléphone ne sont pas touchées.
+
+{
+  "name": "Mon Sport & Nutrition",
+  "short_name": "Mon Sport",
+  "lang": "fr",
+  "start_url": "./#/aujourdhui",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFF5F8",
+  "theme_color": "#FFF5F8",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
+
+// Mode hors connexion : l'app reste utilisable à la salle même sans réseau.
+// Changer VERSION à chaque mise à jour pour que les téléphones récupèrent les nouveaux fichiers.
+const VERSION = 'v1.0.0';
+const SHELL = [
+  './', './index.html', './manifest.webmanifest', './css/app.css',
+  './js/app.js', './js/db.js', './js/seed.js', './js/score.js',
+  './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png',
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil(caches.open('shell-' + VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== 'shell-' + VERSION && k !== 'fonts').map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+});
+
+self.addEventListener('fetch', (e) => {
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET') return;
+  // Polices Google : gardées en cache après le premier chargement.
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
+    e.respondWith(caches.open('fonts').then(async (c) => {
+      const hit = await c.match(e.request);
+      if (hit) return hit;
+      try { const res = await fetch(e.request); if (res.ok || res.type === 'opaque') c.put(e.request, res.clone()); return res; } catch (err) { return hit || Response.error(); }
+    }));
+    return;
+  }
+  if (url.origin !== location.origin) return;
+  // Fichiers de l'app : réseau d'abord (pour les mises à jour), cache si hors connexion.
+  e.respondWith(fetch(e.request).then((res) => {
+    if (res.ok) { const copy = res.clone(); caches.open('shell-' + VERSION).then((c) => c.put(e.request, copy)); }
+    return res;
+  }).catch(() => caches.match(e.request, { ignoreSearch: true }).then((hit) => hit || caches.match('./index.html'))));
+});
