@@ -3,7 +3,7 @@ import { GROUPS, MUSCLES, SESSION_TYPES, EXERCISES } from './seed.js';
 import { computeScore, suggest, applySuggestion, e1rm, scoreLabel } from './score.js';
 import { ACTIVITY, GOALS, MEALS, profileErrors, computeTargets, waterTarget, dayKey, keyToDate, addDays, scale, entryMacros, sumMacros, BUILTIN_FOODS, searchFoods, offUrl, offToFood, mealTarget, roleOf, buildPlate, prepIdeas, aiPrompt } from './nutrition.js';
 
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.2.1';
 
 // ---------- État ----------
 const S = {
@@ -776,9 +776,10 @@ function nutriSheet(sh) {
     const fav = S.favs.includes(f.id);
     return `<div class="between"><h2 style="font-size:18px">${esc(f.name)}</h2>${close}</div>
       <span class="tiny muted">Pour 100 g : ${r0(f.kcal)} kcal · P ${fmtNum(f.p)} · G ${fmtNum(f.g)} · L ${fmtNum(f.l)}</span>
+      <label class="field"><span>Poids que tu manges (g)</span>
+        <span class="row"><input class="input" id="q-g" inputmode="decimal" value="${esc(sh.grams)}" placeholder="Ex. 135" data-bind="qtyGrams" style="font-size:26px;font-weight:800;min-height:60px;text-align:center"><span class="bold muted">g</span></span></label>
+      <span class="tiny muted">Tape le poids de ta balance${f.portionG ? ' ou choisis une portion' : ''}.</span>
       ${portions ? `<div class="chips">${portions}</div>` : ''}
-      <div class="chips">${[50, 100, 150, 200].map((g) => `<button class="chip" data-act="qtySet" data-v="${g}">${g} g</button>`).join('')}</div>
-      <label class="field"><span>Quantité (g)</span><input class="input" id="q-g" inputmode="decimal" value="${esc(sh.grams)}" data-bind="qtyGrams" style="font-size:20px;font-weight:800"></label>
       <div id="qtymac">${qtyMacros(sh)}</div>
       ${sh.target === 'recipe' ? '' : mealSelect(sh.meal)}
       <button class="btn ghost" data-act="toggleFav" style="align-self:flex-start;color:var(--pink-ink)">${I.star} ${fav ? 'Retirer des favoris' : 'Ajouter aux favoris'}</button>
@@ -905,12 +906,16 @@ function vIdeas() {
   const mealName = MEALS.find((m) => m.id === meal).name;
   let results = '';
   if (fridge.length && mt) {
-    const plate = buildPlate(fridge, mt);
+    const locks = S.ui.plateLocks || {};
+    const plate = buildPlate(fridge, mt, locks);
     const ideas = prepIdeas(plate.groups);
     const t = plate.tot;
     results = `<div class="card">
       <div class="between"><h3>Ton assiette calculée</h3><span class="pill">${mealName}</span></div>
-      ${plate.items.map((i) => `<div class="between small" style="padding:4px 0;border-top:1px solid var(--line)"><span>${esc(i.food.name)}</span><b>${i.grams} g</b></div>`).join('')}
+      <span class="tiny muted">Touche une quantité pour mettre ton propre poids : les autres ingrédients se réajustent.</span>
+      ${plate.items.map((i) => `<div class="row small" style="padding:4px 0;border-top:1px solid var(--line)"><span class="grow">${esc(i.food.name)}${i.locked ? ' <span class="pill pink" style="font-size:10px">mon poids</span>' : ''}</span>
+        <input class="set-input" style="width:84px;font-size:15px;${i.locked ? 'border-color:var(--pink)' : ''}" inputmode="decimal" value="${esc(fmtNum(i.grams))}" data-plate="${esc(i.food.id)}" aria-label="Grammes de ${esc(i.food.name)}"><span class="tiny muted">g</span></div>`).join('')}
+      ${Object.keys(locks).length ? '<button class="btn small ghost" data-act="plateReset" style="align-self:flex-start">Revenir au calcul automatique</button>' : ''}
       <div class="between bold" style="padding:10px 12px;border-radius:16px;background:var(--bg)"><span>${Math.round(t.kcal)} kcal</span><span class="blue">${Math.round(t.p)} g P</span><span>${Math.round(t.g)} g G</span><span>${Math.round(t.l)} g L</span></div>
       <span class="tiny muted">Objectif du repas : ${mt.kcal} kcal · ${mt.p} g P · ${mt.g} g G · ${mt.l} g L. Les poids sont ceux des aliments tels qu'indiqués (cru ou cuit).</span>
       ${plate.missing.length ? `<span class="small pink bold">Pour un repas complet, il manque ${list2(plate.missing)}.</span>` : ''}
@@ -1003,6 +1008,7 @@ function renderSheet() {
   }
   if (!body) body = nutriSheet(sh);
   el.innerHTML = `<div class="sheet-bg" data-act="sheetBg"><div class="sheet" role="dialog" aria-modal="true">${body}</div></div>`;
+  if (sh.type === 'qty' && !sh.focused) { sh.focused = true; const g = document.getElementById('q-g'); if (g) { g.focus(); g.select(); } }
 }
 const openSheet = (s) => { if (s.type === 'picker') S.ui.libQuery = ''; S.sheet = s; renderSheet(); };
 const closeSheet = () => { if (S.sheet && S.sheet.type === 'picker') S.ui.libQuery = ''; S.sheet = null; renderSheet(); };
@@ -1222,7 +1228,7 @@ Object.assign(A, {
     let food = S.foodMap[id] || (sh.online || []).find((f) => f.id === id) || recentFoods().find((f) => f.id === id);
     if (!food) return;
     if (!S.foodMap[id] && food.origin === 'off') { await db.put('foods', { ...food }); await load(); }
-    openSheet({ type: 'qty', food, meal: sh.meal, day: sh.day, grams: food.portionG || 100, target: sh.target, recipeId: sh.recipeId });
+    openSheet({ type: 'qty', food, meal: sh.meal, day: sh.day, grams: food.portionG || '', target: sh.target, recipeId: sh.recipeId });
   },
   qtySet: (el) => { S.sheet.grams = el.dataset.v; const i = $('#q-g'); if (i) i.value = el.dataset.v; $('#qtymac').innerHTML = qtyMacros(S.sheet); },
   async toggleFav() {
@@ -1270,7 +1276,7 @@ Object.assign(A, {
       portionName: $('#nf-pn').value.trim() || null, portionG: v('pg') || null, origin: 'perso', custom: true };
     if (f.portionName && !f.portionG) f.portionName = null;
     await db.put('foods', f); await load();
-    openSheet({ type: 'qty', food: f, meal: sh.meal, day: sh.day, grams: f.portionG || 100, target: sh.target, recipeId: sh.recipeId });
+    openSheet({ type: 'qty', food: f, meal: sh.meal, day: sh.day, grams: f.portionG || '', target: sh.target, recipeId: sh.recipeId });
   },
   async offSearch() {
     const sh = S.sheet; const q = sh.q.trim(); if (!q) return;
@@ -1363,15 +1369,16 @@ Object.assign(A, {
     await reload(); toast('Ajouté au journal');
   },
   async recDelete() { if (!confirm('Supprimer cette recette ?')) return; await db.remove('recipes', route().id); await reload(); go('/atester'); },
-  ideaMeal: (el) => { S.ui.ideaMeal = el.dataset.v; render(); },
-  async fridgeAdd(el) { S.fridge = [...(S.fridge || []), el.dataset.id]; S.ui.fridgeQ = ''; await db.setSetting('fridge', S.fridge); render(); setTimeout(() => document.getElementById('fridge-q')?.focus(), 30); },
-  async fridgeDel(el) { S.fridge = S.fridge.filter((x) => x !== el.dataset.id); await db.setSetting('fridge', S.fridge); render(); },
-  async fridgeClear() { S.fridge = []; await db.setSetting('fridge', []); render(); },
+  ideaMeal: (el) => { S.ui.ideaMeal = el.dataset.v; S.ui.plateLocks = {}; render(); },
+  plateReset: () => { S.ui.plateLocks = {}; render(); },
+  async fridgeAdd(el) { S.ui.plateLocks = {}; S.fridge = [...(S.fridge || []), el.dataset.id]; S.ui.fridgeQ = ''; await db.setSetting('fridge', S.fridge); render(); setTimeout(() => document.getElementById('fridge-q')?.focus(), 30); },
+  async fridgeDel(el) { if (S.ui.plateLocks) delete S.ui.plateLocks[el.dataset.id]; S.fridge = S.fridge.filter((x) => x !== el.dataset.id); await db.setSetting('fridge', S.fridge); render(); },
+  async fridgeClear() { S.ui.plateLocks = {}; S.fridge = []; await db.setSetting('fridge', []); render(); },
   currentPlate() {
     const meal = S.ui.ideaMeal || defaultIdeaMeal(); const k = dayKey();
     const mt = mealTarget(meal, targetsFor(k), sumMacros(entriesOf(k).filter((e) => e.meal !== meal)));
     const foods = S.fridge.map((id) => S.foodMap[id]).filter(Boolean);
-    return { meal, plate: buildPlate(foods, mt), mt, foods };
+    return { meal, plate: buildPlate(foods, mt, S.ui.plateLocks || {}), mt, foods };
   },
   async plateToJournal() {
     const { meal, plate } = A.currentPlate(); const now = Date.now();
@@ -1440,6 +1447,11 @@ document.addEventListener('input', (ev) => {
 });
 document.addEventListener('change', (ev) => {
   const el = ev.target;
+  if (el.dataset.plate) {
+    const v = parseNum(el.value); S.ui.plateLocks = S.ui.plateLocks || {};
+    if (v === null) delete S.ui.plateLocks[el.dataset.plate]; else S.ui.plateLocks[el.dataset.plate] = v;
+    render(); return;
+  }
   if (el.dataset.line !== undefined && S.draft) {
     const l = S.draft.lines[Number(el.dataset.line)];
     l[el.dataset.f] = el.dataset.f === 'variantId' ? (el.value || null) : el.value;

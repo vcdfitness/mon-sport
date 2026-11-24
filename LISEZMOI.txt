@@ -1,4 +1,4 @@
-MON SPORT & NUTRITION — version 1.2.0 (séances, nutrition, recettes, poids)
+MON SPORT & NUTRITION — version 1.2.1 (séances, nutrition, recettes, poids)
 
 Ce dossier contient toute l'application. Il ne contient aucune donnée personnelle :
 tes séances, vidéos et records sont enregistrés uniquement sur ton iPhone.

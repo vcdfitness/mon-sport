@@ -145,29 +145,39 @@ const round5 = (x) => Math.max(0, Math.round(x / 5) * 5);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 
 // Calcule les grammes de chaque ingrédient pour approcher l'objectif du repas.
-export function buildPlate(foods, target) {
+// locks = { idAliment: grammes } : quantités choisies par l'utilisatrice, gardées telles quelles ;
+// les autres ingrédients sont ajustés autour.
+export function buildPlate(foods, target, locks = {}) {
   const groups = { prot: [], carb: [], veg: [], fat: [] };
   for (const f of foods) groups[roleOf(f)].push(f);
   const items = []; const tot = { kcal: 0, p: 0, g: 0, l: 0 };
-  const add = (f, grams) => {
-    grams = round5(grams); if (grams <= 0) return;
-    items.push({ food: f, grams });
+  const add = (f, grams, locked = false) => {
+    grams = locked ? Math.max(0, Number(grams) || 0) : round5(grams); if (grams <= 0 && !locked) return;
+    items.push({ food: f, grams, locked });
     const m = scale(f, grams); tot.kcal += m.kcal; tot.p += m.p; tot.g += m.g; tot.l += m.l;
   };
-  const vegs = groups.veg.slice(0, 3);
+  const isLocked = (f) => Object.prototype.hasOwnProperty.call(locks, f.id);
+  for (const f of foods) if (isLocked(f)) add(f, locks[f.id], true);
+  const free = (role) => groups[role].filter((f) => !isLocked(f));
+  const vegs = free('veg').slice(0, 3);
   for (const f of vegs) add(f, vegs.length === 1 ? 150 : 100);
-  if (groups.prot.length) {
+  const prot = free('prot');
+  if (prot.length) {
     const need = Math.max(0, target.p - tot.p) * 0.9;
-    for (const f of groups.prot) add(f, clamp((need / groups.prot.length) / (f.p / 100), 30, 300));
+    for (const f of prot) add(f, clamp((need / prot.length) / (f.p / 100), 30, 300));
   }
-  if (groups.carb.length) {
+  const carb = free('carb');
+  if (carb.length) {
     const need = Math.max(0, target.g - tot.g);
-    for (const f of groups.carb) add(f, clamp((need / groups.carb.length) / Math.max(1, f.g) * 100, 0, 350));
+    for (const f of carb) add(f, clamp((need / carb.length) / Math.max(1, f.g) * 100, 0, 350));
   }
-  if (groups.fat.length) {
+  const fat = free('fat');
+  if (fat.length) {
     const need = target.l - tot.l;
-    if (need > 3) for (const f of groups.fat) add(f, clamp((need / groups.fat.length) / Math.max(1, f.l) * 100, 5, f.kcal > 800 ? 20 : 40));
+    if (need > 3) for (const f of fat) add(f, clamp((need / fat.length) / Math.max(1, f.l) * 100, 5, f.kcal > 800 ? 20 : 40));
   }
+  const order = foods.map((f) => f.id);
+  items.sort((a, b) => order.indexOf(a.food.id) - order.indexOf(b.food.id));
   const missing = [];
   if (!groups.prot.length) missing.push('une source de protéines (poulet, œuf, skyr, tofu…)');
   if (!groups.carb.length && target.g > 30) missing.push('un féculent (riz, pâtes, pomme de terre…)');
