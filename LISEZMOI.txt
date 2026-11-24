@@ -1,0 +1,28 @@
+MON SPORT & NUTRITION — version 1.0.0 (partie séances)
+
+Ce dossier contient toute l'application. Il ne contient aucune donnée personnelle :
+tes séances, vidéos et records sont enregistrés uniquement sur ton iPhone.
+
+MISE EN LIGNE (GitHub Pages, gratuit)
+1. Crée un compte sur https://github.com
+2. Bouton « + » en haut à droite > New repository > nom : mon-sport > Public > Create repository
+3. Lien « uploading an existing file » > glisse TOUT le contenu de ce dossier
+   (index.html, sw.js, manifest.webmanifest, LISEZMOI.txt et les dossiers (plus aucun dossier : 13 fichiers au même niveau)) > Commit changes
+4. Settings > Pages > Source : Deploy from a branch > Branch : main, dossier / (root) > Save
+5. Après 1 à 2 minutes, l'adresse s'affiche : https://TON-PSEUDO.github.io/mon-sport/
+
+INSTALLATION SUR L'IPHONE
+Ouvre l'adresse dans Safari > bouton Partager > « Sur l'écran d'accueil » > Ajouter.
+Utilise toujours l'icône de l'écran d'accueil : c'est là que tes données sont rangées.
+
+AJOUTER UNE VIDÉO
+Dans Instagram, TikTok ou YouTube : Partager > Copier le lien.
+Ouvre l'app > « Coller un lien ».
+
+SAUVEGARDE
+Réglages (roue dentée sur l'accueil) > Exporter une sauvegarde > Enregistrer dans Fichiers.
+À faire environ une fois par semaine.
+
+MISE À JOUR DE L'APP
+Remplace les fichiers modifiés dans le dépôt GitHub (Add file > Upload files).
+Tes données sur le téléphone ne sont pas touchées.
