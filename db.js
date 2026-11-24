@@ -1,7 +1,7 @@
 // Base de données locale (IndexedDB), stockée sur le téléphone.
 const DB_NAME = 'sport-nutrition';
-const DB_VERSION = 1;
-export const STORES = ['settings', 'muscles', 'exercises', 'videos', 'templates', 'sessions'];
+const DB_VERSION = 2;
+export const STORES = ['settings', 'muscles', 'exercises', 'videos', 'templates', 'sessions', 'foods', 'journal', 'weights', 'daily'];
 
 let dbPromise = null;
 
