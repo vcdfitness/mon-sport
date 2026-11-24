@@ -113,3 +113,89 @@ export function offToFood(pr) {
     portionName: sq > 0 ? '1 portion' : null, portionG: sq > 0 ? sq : null, origin: 'off', code: pr.code, custom: true,
   };
 }
+
+// ---------- Idées de repas à partir des ingrédients disponibles ----------
+// Part de l'objectif du jour visée par chaque repas (le dîner prend ce qui reste, 45 % du jour au plus).
+export const MEAL_SHARE = { petitdej: 0.25, dejeuner: 0.35, collation: 0.12, pre: 0.12, post: 0.15, diner: null };
+
+export function mealTarget(meal, dayTarget, eaten) {
+  if (!dayTarget) return null;
+  const left = { kcal: dayTarget.kcal - eaten.kcal, p: dayTarget.p - eaten.p, g: dayTarget.g - eaten.g, l: dayTarget.l - eaten.l };
+  const share = MEAL_SHARE[meal];
+  const cap = (x, part) => Math.min(dayTarget[x] * part, left[x]);
+  const t = share == null ? { kcal: cap('kcal', 0.45), p: cap('p', 0.45), g: cap('g', 0.45), l: cap('l', 0.45) } : {
+    kcal: Math.min(dayTarget.kcal * share, left.kcal), p: Math.min(dayTarget.p * share, left.p),
+    g: Math.min(dayTarget.g * share, left.g), l: Math.min(dayTarget.l * share, left.l),
+  };
+  return { kcal: Math.max(0, Math.round(t.kcal)), p: Math.max(0, Math.round(t.p)), g: Math.max(0, Math.round(t.g)), l: Math.max(0, Math.round(t.l)) };
+}
+
+// Classe un aliment selon ce qu'il apporte surtout.
+export function roleOf(f) {
+  const kcal = Math.max(1, f.kcal);
+  const pP = f.p * 4 / kcal; const gP = f.g * 4 / kcal; const lP = f.l * 9 / kcal;
+  if (pP >= 0.3 && f.p >= 5) return 'prot';
+  if (f.kcal <= 60) return 'veg';
+  if (gP >= 0.5) return 'carb';
+  if (lP >= 0.6) return 'fat';
+  return f.g >= f.l ? 'carb' : 'fat';
+}
+
+const round5 = (x) => Math.max(0, Math.round(x / 5) * 5);
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+
+// Calcule les grammes de chaque ingrédient pour approcher l'objectif du repas.
+export function buildPlate(foods, target) {
+  const groups = { prot: [], carb: [], veg: [], fat: [] };
+  for (const f of foods) groups[roleOf(f)].push(f);
+  const items = []; const tot = { kcal: 0, p: 0, g: 0, l: 0 };
+  const add = (f, grams) => {
+    grams = round5(grams); if (grams <= 0) return;
+    items.push({ food: f, grams });
+    const m = scale(f, grams); tot.kcal += m.kcal; tot.p += m.p; tot.g += m.g; tot.l += m.l;
+  };
+  const vegs = groups.veg.slice(0, 3);
+  for (const f of vegs) add(f, vegs.length === 1 ? 150 : 100);
+  if (groups.prot.length) {
+    const need = Math.max(0, target.p - tot.p) * 0.9;
+    for (const f of groups.prot) add(f, clamp((need / groups.prot.length) / (f.p / 100), 30, 300));
+  }
+  if (groups.carb.length) {
+    const need = Math.max(0, target.g - tot.g);
+    for (const f of groups.carb) add(f, clamp((need / groups.carb.length) / Math.max(1, f.g) * 100, 0, 350));
+  }
+  if (groups.fat.length) {
+    const need = target.l - tot.l;
+    if (need > 3) for (const f of groups.fat) add(f, clamp((need / groups.fat.length) / Math.max(1, f.l) * 100, 5, f.kcal > 800 ? 20 : 40));
+  }
+  const missing = [];
+  if (!groups.prot.length) missing.push('une source de protéines (poulet, œuf, skyr, tofu…)');
+  if (!groups.carb.length && target.g > 30) missing.push('un féculent (riz, pâtes, pomme de terre…)');
+  if (!groups.veg.length) missing.push('des légumes');
+  return { items, tot, groups, missing };
+}
+
+const shortName = (f) => f.name.replace(/ (cru|crue|cuit|cuite|crus|cuits)$/i, '').toLowerCase();
+const list = (arr) => arr.length <= 1 ? (arr[0] || '') : arr.slice(0, -1).join(', ') + ' et ' + arr[arr.length - 1];
+
+// Idées de préparation selon les ingrédients.
+export function prepIdeas(groups) {
+  const P = list(groups.prot.map(shortName)); const C = list(groups.carb.map(shortName));
+  const V = list(groups.veg.map(shortName)); const F = groups.fat[0] ? shortName(groups.fat[0]) : "un filet d'huile";
+  const ideas = [];
+  const roastable = groups.carb.some((f) => /patate|pomme de terre/i.test(f.name));
+  const raw = groups.prot.some((f) => /(cru|crue)$/i.test(f.name) || /steak|escalope|blanc de poulet|cabillaud|saumon cru|tofu/i.test(f.name));
+  const leafy = groups.veg.filter((f) => /épinard|salade|roquette|mâche/i.test(f.name));
+  const VR = list(groups.veg.filter((f) => !leafy.includes(f)).map(shortName)); const VL = list(leafy.map(shortName));
+  if (roastable) ideas.push({ name: 'Plaque au four', time: '35 min', steps: `Préchauffe le four à 200 °C. Coupe ${C}${VR ? ' et ' + VR : ''} en cubes, mélange avec ${F}, sel, paprika et ail. Enfourne 25 min${P ? `, ajoute ${P} en morceaux à mi-cuisson` : ''} et termine 10 à 12 min.${VL ? ` Sers sur un lit de ${VL}.` : ''}` });
+  if (P || C) ideas.push({ name: 'Bowl', time: '20 min', steps: `${C ? `Fais cuire ${C}. ` : ''}${P ? `Saisis ${P} à la poêle avec ${F}, 6 à 8 min${raw ? ' (bien cuit à cœur)' : ''}. ` : ''}${V ? `Ajoute ${V}, crus ou poêlés 3 min. ` : ''}Dresse dans un bol avec une sauce yaourt-citron ou soja-sésame.` });
+  if (P && V) ideas.push({ name: 'Poêlée express', time: '15 min', steps: `Coupe ${P} en lanières et fais-les revenir dans ${F}. Ajoute ${V}${C ? ` puis ${C} déjà cuit` : ''}, épices au choix (curry, herbes de Provence), 5 min à feu vif.` });
+  if (!ideas.length) ideas.push({ name: 'Assiette simple', time: '10 min', steps: 'Assemble les ingrédients, assaisonne, et complète avec ce qui te manque pour équilibrer le repas.' });
+  return ideas.slice(0, 2);
+}
+
+export function aiPrompt({ goalLabel, mealLabel, target, foods }) {
+  return `Je suis en ${goalLabel.toLowerCase()}. Pour mon ${mealLabel.toLowerCase()}, il me reste environ ${target.kcal} kcal, ${target.p} g de protéines, ${target.g} g de glucides et ${target.l} g de lipides.
+J'ai à la maison : ${foods.map((f) => f.name.toLowerCase()).join(', ')}.
+Propose-moi 3 recettes simples (30 min maximum) avec ces ingrédients (et éventuellement des basiques du placard : épices, sauce soja, ail…). Pour chacune : les quantités en grammes pour rentrer dans ces macros, les étapes courtes, et le total kcal / protéines / glucides / lipides.`;
+}

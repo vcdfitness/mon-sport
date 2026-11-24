@@ -1,9 +1,9 @@
 import { db, uid } from './db.js';
 import { GROUPS, MUSCLES, SESSION_TYPES, EXERCISES } from './seed.js';
 import { computeScore, suggest, applySuggestion, e1rm, scoreLabel } from './score.js';
-import { ACTIVITY, GOALS, MEALS, profileErrors, computeTargets, waterTarget, dayKey, keyToDate, addDays, scale, entryMacros, sumMacros, BUILTIN_FOODS, searchFoods, offUrl, offToFood } from './nutrition.js';
+import { ACTIVITY, GOALS, MEALS, profileErrors, computeTargets, waterTarget, dayKey, keyToDate, addDays, scale, entryMacros, sumMacros, BUILTIN_FOODS, searchFoods, offUrl, offToFood, mealTarget, roleOf, buildPlate, prepIdeas, aiPrompt } from './nutrition.js';
 
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 
 // ---------- État ----------
 const S = {
@@ -125,14 +125,15 @@ async function load() {
     await db.putMany('exercises', EXERCISES.map((e) => ({ ...e })));
     await db.setSetting('seeded', APP_VERSION);
   }
-  [S.exercises, S.muscles, S.videos, S.templates, S.sessions, S.customFoods, S.journal, S.weights, S.daily] = await Promise.all(
-    ['exercises', 'muscles', 'videos', 'templates', 'sessions', 'foods', 'journal', 'weights', 'daily'].map((s) => db.all(s)));
+  [S.exercises, S.muscles, S.videos, S.templates, S.sessions, S.customFoods, S.journal, S.weights, S.daily, S.recipes] = await Promise.all(
+    ['exercises', 'muscles', 'videos', 'templates', 'sessions', 'foods', 'journal', 'weights', 'daily', 'recipes'].map((s) => db.all(s)));
   S.foods = [...S.customFoods, ...BUILTIN_FOODS];
   S.foodMap = Object.fromEntries(S.foods.map((f) => [f.id, f]));
   S.weights.sort((a, b) => a.date.localeCompare(b.date));
   S.profile = await db.getSetting('profile');
   S.favs = await db.getSetting('favs', []);
   S.dayTypes = await db.getSetting('dayTypes', {});
+  S.fridge = await db.getSetting('fridge', []);
   const order = MUSCLES.map((m) => m.id);
   const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 999 : i; };
   S.muscles.sort((a, b) => rank(a.id) - rank(b.id));
@@ -155,7 +156,7 @@ const go = (h) => { location.hash = h; };
 
 function render() {
   const r = route();
-  const views = { aujourdhui: vToday, seances: vSeances, exercices: vLibrary, exercice: vExercise, seance: vTemplate, encours: vActive, bilan: vSummary, reglages: vSettings, nutrition: vNutrition, profil: vProfile, corps: vCorps };
+  const views = { aujourdhui: vToday, seances: vSeances, exercices: vLibrary, exercice: vExercise, seance: vTemplate, encours: vActive, bilan: vSummary, reglages: vSettings, nutrition: vNutrition, profil: vProfile, corps: vCorps, idees: vIdeas, atester: vATester, recette: vRecipe };
   const v = views[r.name] || vToday;
   $('#app').innerHTML = v(r);
   $('#nav').innerHTML = nav(r.name);
@@ -165,7 +166,7 @@ function render() {
 }
 
 function nav(name) {
-  const tab = { aujourdhui: 'a', seances: 's', seance: 's', encours: 's', bilan: 's', exercices: 'e', exercice: 'e', nutrition: 'n', profil: 'n', corps: 'c', reglages: 'a' }[name] || 'a';
+  const tab = { aujourdhui: 'a', seances: 's', seance: 's', encours: 's', bilan: 's', exercices: 'e', exercice: 'e', nutrition: 'n', profil: 'n', idees: 'n', atester: 'n', recette: 'n', corps: 'c', reglages: 'a' }[name] || 'a';
   const it = (k, href, icon, label, pink) => `<a href="#/${href}" class="${tab === k ? 'on' : ''} ${pink ? 'pinkon' : ''}" ${tab === k ? 'aria-current="page"' : ''}>${icon}${label}</a>`;
   return it('a', 'aujourdhui', I.home, "Aujourd'hui") + it('s', S.active ? 'encours' : 'seances', I.dumbbell, 'Séance') + it('e', 'exercices', I.video, 'Exercices') + it('n', 'nutrition', I.food, 'Nutrition', true) + it('c', 'corps', I.chart, 'Corps');
 }
@@ -619,7 +620,7 @@ function vNutrition(r) {
       <div class="row" style="gap:4px"><a class="icon-btn" href="#/nutrition?d=${addDays(k, -1)}" aria-label="Jour précédent">${I.back}</a>
       <span class="small bold" style="min-width:76px;text-align:center">${dayLabel(k)}</span>
       <a class="icon-btn" href="#/nutrition?d=${addDays(k, 1)}" aria-label="Jour suivant">${I.next}</a></div></div>
-    <div class="seg pinkseg"><a class="on" href="#/nutrition">Journal</a><button data-act="soon">Idées recettes</button><button data-act="soon">À tester</button></div>
+    ${nutriSeg('j')}
     ${setup ? `<a class="card pink" href="#/profil"><span class="bold">Calcule tes besoins</span><span class="small" style="color:var(--pink-deep)">Renseigne ton profil (1 minute) : l'app calcule tes calories et tes macros.</span></a>` : ''}
     <div class="card">
       ${kcalBlock(tot, tg)}${macroBars(tot, tg)}
@@ -765,7 +766,7 @@ const mealSelect = (cur, id = 'q-meal') => `<label class="field"><span>Repas</sp
 function nutriSheet(sh) {
   const close = `<button class="icon-btn" data-act="closeSheet" aria-label="Fermer">${I.x}</button>`;
   if (sh.type === 'food') {
-    return `<div class="between"><h2>${esc(MEALS.find((m) => m.id === sh.meal).name)}</h2>${close}</div>
+    return `<div class="between"><h2>${sh.target === 'recipe' ? 'Ingrédient' : esc(MEALS.find((m) => m.id === sh.meal).name)}</h2>${close}</div>
       <label class="search">${I.search}<span class="sr">Rechercher un aliment</span><input id="food-q" type="search" placeholder="Aliment, marque ou code-barres…" value="${esc(sh.q)}" data-bind="foodQuery" autocomplete="off"></label>
       <div id="foodres" class="col">${foodResults(sh)}</div>`;
   }
@@ -779,9 +780,9 @@ function nutriSheet(sh) {
       <div class="chips">${[50, 100, 150, 200].map((g) => `<button class="chip" data-act="qtySet" data-v="${g}">${g} g</button>`).join('')}</div>
       <label class="field"><span>Quantité (g)</span><input class="input" id="q-g" inputmode="decimal" value="${esc(sh.grams)}" data-bind="qtyGrams" style="font-size:20px;font-weight:800"></label>
       <div id="qtymac">${qtyMacros(sh)}</div>
-      ${mealSelect(sh.meal)}
+      ${sh.target === 'recipe' ? '' : mealSelect(sh.meal)}
       <button class="btn ghost" data-act="toggleFav" style="align-self:flex-start;color:var(--pink-ink)">${I.star} ${fav ? 'Retirer des favoris' : 'Ajouter aux favoris'}</button>
-      <button class="btn pink block" data-act="saveEntry">${sh.entryId ? 'Enregistrer' : 'Ajouter'}</button>
+      <button class="btn pink block" data-act="saveEntry">${sh.target === 'recipe' ? 'Ajouter à la recette' : sh.entryId ? 'Enregistrer' : 'Ajouter'}</button>
       ${sh.entryId ? `<button class="btn danger block" data-act="delEntry" data-id="${sh.entryId}">Retirer du journal</button>` : ''}`;
   }
   if (sh.type === 'quick') {
@@ -794,6 +795,17 @@ function nutriSheet(sh) {
       <button class="btn pink block" data-act="saveQuick">${sh.entry ? 'Enregistrer' : 'Ajouter'}</button>
       ${sh.entry ? `<button class="btn danger block" data-act="delEntry" data-id="${sh.entry.id}">Retirer du journal</button>` : ''}`;
   }
+  if (sh.type === 'recipeLink') {
+    return `<div class="between"><h2>Recette en vidéo</h2>${close}</div>
+      <span class="small muted">Dans Instagram, TikTok ou YouTube : Partager → Copier le lien, puis colle-le ici.</span>
+      <label class="field"><span>Lien</span><input class="input" id="rl-url" inputmode="url" value="${esc(sh.url)}" placeholder="https://www.tiktok.com/…" autocomplete="off"></label>
+      <label class="field"><span>Nom</span><input class="input" id="rl-name" placeholder="Ex. Pâtes crémeuses au skyr"></label>
+      <button class="btn pink block" data-act="saveRecipeLink">Ajouter aux recettes à tester</button>`;
+  }
+  if (sh.type === 'promptText') {
+    return `<div class="between"><h2>Demande à copier</h2>${close}</div><span class="small muted">Sélectionne le texte, copie-le et colle-le dans l'app Claude.</span>
+      <textarea class="input" style="min-height:220px" readonly>${esc(sh.text)}</textarea>`;
+  }
   if (sh.type === 'newFood') {
     const f = sh.food || {};
     return `<div class="between"><h2>Nouvel aliment</h2>${close}</div>
@@ -805,6 +817,141 @@ function nutriSheet(sh) {
       <button class="btn pink block" data-act="saveNewFood">Enregistrer et continuer</button>`;
   }
   return '';
+}
+
+// ---------- Recettes ----------
+const RSTATUS = { atester: { label: 'À tester', cls: 'pink' }, validee: { label: 'Validée', cls: '' }, bof: { label: 'Pas convaincue', cls: 'grey' } };
+const RTAGS = ['Petit-déj', 'Repas', 'Collation', 'Riche en protéines', 'Rapide', 'Batch cooking', 'Sucré'];
+const nutriSeg = (on) => `<div class="seg pinkseg"><a class="${on === 'j' ? 'on' : ''}" href="#/nutrition">Journal</a><a class="${on === 'i' ? 'on' : ''}" href="#/idees">Idées recettes</a><a class="${on === 't' ? 'on' : ''}" href="#/atester">À tester</a></div>`;
+function recipeTotals(r) {
+  const tot = { kcal: 0, p: 0, g: 0, l: 0 };
+  for (const i of r.ingredients || []) { const m = scale(i.per, Number(i.grams) || 0); tot.kcal += m.kcal; tot.p += m.p; tot.g += m.g; tot.l += m.l; }
+  const n = Math.max(1, Number(r.servings) || 1);
+  return { tot, per: { kcal: tot.kcal / n, p: tot.p / n, g: tot.g / n, l: tot.l / n } };
+}
+function recipeThumb(r, h = 118) {
+  const yt = r.url && ytId(r.url);
+  const inner = r.image ? `<img src="${r.image}" alt="" style="width:100%;height:100%;object-fit:cover">`
+    : yt ? `<img src="https://i.ytimg.com/vi/${yt}/mqdefault.jpg" alt="" style="width:100%;height:100%;object-fit:cover">`
+    : `<span style="color:var(--pink-ink)">${r.url ? I.play : I.food}</span>`;
+  const badge = r.image ? (r.kind === 'photo' ? 'Photo' : 'Capture') : r.url ? platformOf(r.url) : '';
+  return `<div style="height:${h}px;background:var(--pink-soft);position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden">${inner}
+    ${badge ? `<span class="pill" style="position:absolute;top:8px;left:8px;background:#fff;color:var(--ink);font-size:10px">${esc(badge)}</span>` : ''}</div>`;
+}
+
+function recPerHtml(r) {
+  const { tot, per } = recipeTotals(r);
+  return `<div class="between bold"><span>${Math.round(per.kcal)} kcal</span><span class="blue">${fmtNum(per.p)} g P</span><span>${fmtNum(per.g)} g G</span><span>${fmtNum(per.l)} g L</span></div>
+      <span class="tiny" style="color:var(--pink-deep)">Recette entière : ${Math.round(tot.kcal)} kcal</span>`;
+}
+function vATester() {
+  const f = S.ui.recFilter || 'all'; const tag = S.ui.recTag || null;
+  const counts = { all: S.recipes.length };
+  for (const k of Object.keys(RSTATUS)) counts[k] = S.recipes.filter((r) => r.status === k).length;
+  const list = S.recipes.filter((r) => (f === 'all' || r.status === f) && (!tag || (r.tags || []).includes(tag)))
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const cards = list.map((r) => `<a href="#/recette/${r.id}" style="background:#fff;border-radius:22px;overflow:hidden;display:flex;flex-direction:column;color:var(--ink)">${recipeThumb(r)}
+      <div style="padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px"><span style="font-size:13px;font-weight:800;line-height:1.25">${esc(r.name || 'Sans nom')}</span>
+      <span class="pill ${RSTATUS[r.status]?.cls || ''}" style="align-self:flex-start;font-size:11px">${RSTATUS[r.status]?.label || ''}${r.rating ? ' · ' + r.rating + '/5' : ''}</span></div></a>`).join('');
+  const fileBtn = (label, icon, capture) => `<label class="btn white" style="min-height:72px;flex-direction:column;gap:6px;border-radius:22px;color:var(--pink-ink);font-size:12px;position:relative;overflow:hidden">${icon}${label}
+      <input type="file" accept="image/*" ${capture ? 'capture="environment"' : ''} data-act-change="recipeImage" data-kind="${capture ? 'photo' : 'capture'}" style="position:absolute;inset:0;opacity:0"></label>`;
+  return `<h1>Nutrition</h1>${nutriSeg('t')}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+      <button class="btn white" style="min-height:72px;flex-direction:column;gap:6px;border-radius:22px;color:var(--pink-ink);font-size:12px" data-act="recipeLink">${I.link}Lien vidéo</button>
+      ${fileBtn('Capture', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4"/></svg>', false)}
+      ${fileBtn('Photo', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>', true)}</div>
+    <div class="chips scroll">${[['all', 'Toutes'], ...Object.entries(RSTATUS).map(([k, v]) => [k, v.label])].map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-act="recFilter" data-v="${k}">${l} · ${counts[k]}</button>`).join('')}</div>
+    <div class="chips scroll">${RTAGS.map((t) => `<button class="chip ${tag === t ? 'pink on' : 'pink'}" data-act="recTag" data-v="${t}">${t}</button>`).join('')}</div>
+    ${cards ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>` : `<div class="empty">${S.recipes.length ? 'Aucune recette pour ce filtre.' : 'Ajoute ta première recette repérée sur les réseaux : lien de la vidéo, capture d\'écran ou photo du plat.'}</div>`}`;
+}
+
+function vRecipe(r0id) {
+  const r = S.recipes.find((x) => x.id === r0id.id);
+  if (!r) return `<div class="empty">Recette introuvable.</div><a class="btn" href="#/atester">Retour</a>`;
+  const ings = (r.ingredients || []).map((i, idx) => `<div class="row" style="padding:6px 0;border-top:1px solid var(--line)"><span class="grow small bold">${esc(i.name)}</span>
+      <input class="set-input" style="width:72px;font-size:15px" inputmode="decimal" value="${esc(fmtNum(i.grams))}" data-ring="${idx}" aria-label="Grammes de ${esc(i.name)}"><span class="tiny muted">g</span>
+      <button class="icon-btn" style="width:34px;height:34px;background:var(--pink-soft);color:var(--pink-ink)" data-act="recIngDel" data-i="${idx}" aria-label="Retirer">${I.x}</button></div>`).join('');
+  return `<div class="between"><button class="icon-btn" data-act="back" aria-label="Retour">${I.back}</button>
+      <div class="row" style="gap:6px">${r.url ? `<a class="btn small white" href="${esc(r.url)}" target="_blank" rel="noopener">${I.play} Voir la vidéo</a>` : ''}</div></div>
+    <textarea class="input" rows="2" style="font-family:Quicksand,sans-serif;font-size:22px;font-weight:700;border-color:transparent;background:transparent;padding:0;min-height:0;resize:none" placeholder="Nom de la recette" data-rec="name" aria-label="Nom de la recette">${esc(r.name)}</textarea>
+    ${r.image ? `<img src="${r.image}" alt="" style="width:100%;max-height:420px;object-fit:contain;border-radius:22px;background:#fff">` : r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="border-radius:22px;overflow:hidden;display:block">${recipeThumb(r, 180)}</a>` : ''}
+    <label class="field"><span>Lien de la vidéo</span><input class="input" inputmode="url" value="${esc(r.url || '')}" placeholder="https://…" data-rec="url"></label>
+    <div class="seg pinkseg">${Object.entries(RSTATUS).map(([k, v]) => `<button class="${r.status === k ? 'on' : ''}" data-act="recStatus" data-v="${k}">${v.label}</button>`).join('')}</div>
+    ${r.status !== 'atester' ? `<div class="row" style="gap:4px" role="group" aria-label="Note">${[1, 2, 3, 4, 5].map((n) => `<button class="icon-btn" style="background:transparent;color:${(r.rating || 0) >= n ? 'var(--pink)' : '#E4DCEA'}" data-act="recRate" data-v="${n}" aria-label="${n} sur 5">${I.star}</button>`).join('')}</div>` : ''}
+    <div class="chips">${RTAGS.map((t) => `<button class="chip ${(r.tags || []).includes(t) ? 'pink on' : 'pink'}" data-act="recTagToggle" data-v="${t}">${t}</button>`).join('')}</div>
+    <div class="card flat" style="gap:6px">
+      <div class="between"><h3>Ingrédients</h3><label class="row tiny muted" style="gap:6px">Portions<input class="set-input" style="width:56px;font-size:15px" inputmode="numeric" value="${esc(r.servings || 1)}" data-rec="servings"></label></div>
+      ${ings || '<span class="small muted">Ajoute les ingrédients pour calculer les macros.</span>'}
+      <button class="btn small ghost" style="align-self:flex-start;color:var(--pink-ink);padding:0" data-act="recIngAdd">${I.plus} Ingrédient</button></div>
+    ${(r.ingredients || []).length ? `<div class="card pink" style="gap:8px"><span class="label" style="color:var(--pink-deep)">Par portion</span>
+      <div id="recper" class="col" style="gap:6px">${recPerHtml(r)}</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap">${mealSelect(S.ui.recMeal || 'diner', 'r-meal').replace('class="field"', 'class="field grow"')}
+        <label class="field" style="width:96px"><span>Portions</span><input class="input" id="r-n" inputmode="decimal" value="1"></label></div>
+      <button class="btn pink block" data-act="recToJournal">Ajouter au journal du jour</button></div>` : ''}
+    <label class="field"><span>Étapes</span><textarea class="input" style="min-height:120px" data-rec="steps" placeholder="1. …">${esc(r.steps || '')}</textarea></label>
+    <label class="field"><span>Mes notes</span><textarea class="input" data-rec="notes" placeholder="Ce que je changerais, où trouver les ingrédients…">${esc(r.notes || '')}</textarea></label>
+    <label class="btn soft-pink" style="position:relative;overflow:hidden">${r.image ? "Changer l'image" : 'Ajouter une image'}<input type="file" accept="image/*" data-act-change="recipeImageSet" style="position:absolute;inset:0;opacity:0"></label>
+    <button class="btn danger block" data-act="recDelete">Supprimer la recette</button>`;
+}
+
+// ---------- Vue : Idées recettes ----------
+function defaultIdeaMeal() { const h = new Date().getHours(); return h < 10 ? 'petitdej' : h < 15 ? 'dejeuner' : h < 18 ? 'collation' : 'diner'; }
+function vIdeas() {
+  const meal = S.ui.ideaMeal || defaultIdeaMeal();
+  const k = dayKey(); const tg = targetsFor(k);
+  const eaten = sumMacros(entriesOf(k).filter((e) => e.meal !== meal));
+  const mt = mealTarget(meal, tg, eaten);
+  const fridge = (S.fridge || []).map((id) => S.foodMap[id]).filter(Boolean);
+  const mealName = MEALS.find((m) => m.id === meal).name;
+  let results = '';
+  if (fridge.length && mt) {
+    const plate = buildPlate(fridge, mt);
+    const ideas = prepIdeas(plate.groups);
+    const t = plate.tot;
+    results = `<div class="card">
+      <div class="between"><h3>Ton assiette calculée</h3><span class="pill">${mealName}</span></div>
+      ${plate.items.map((i) => `<div class="between small" style="padding:4px 0;border-top:1px solid var(--line)"><span>${esc(i.food.name)}</span><b>${i.grams} g</b></div>`).join('')}
+      <div class="between bold" style="padding:10px 12px;border-radius:16px;background:var(--bg)"><span>${Math.round(t.kcal)} kcal</span><span class="blue">${Math.round(t.p)} g P</span><span>${Math.round(t.g)} g G</span><span>${Math.round(t.l)} g L</span></div>
+      <span class="tiny muted">Objectif du repas : ${mt.kcal} kcal · ${mt.p} g P · ${mt.g} g G · ${mt.l} g L. Les poids sont ceux des aliments tels qu'indiqués (cru ou cuit).</span>
+      ${plate.missing.length ? `<span class="small pink bold">Pour un repas complet, il manque ${list2(plate.missing)}.</span>` : ''}
+      ${ideas.map((d) => `<div class="col" style="gap:4px;padding:12px 14px;border-radius:18px;background:var(--pink-soft)"><span class="bold" style="color:var(--pink-deep)">${esc(d.name)} · ${d.time}</span><span class="small" style="color:var(--pink-deep)">${esc(d.steps)}</span></div>`).join('')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn pink" data-act="plateToJournal">Ajouter au ${mealName.toLowerCase()}</button><button class="btn soft-pink" data-act="plateToRecipe">Garder la recette</button></div></div>`;
+    const mine = S.recipes.map((r) => ({ r, n: (r.ingredients || []).filter((i) => S.fridge.includes(i.foodId)).length })).filter((x) => x.n).sort((a, b) => b.n - a.n).slice(0, 4);
+    if (mine.length) results += `<span class="label">Mes recettes avec ces ingrédients</span>${mine.map(({ r, n }) => { const pr = recipeTotals(r).per; return `<a class="list-item" href="#/recette/${r.id}"><span class="thumb pink">${I.food}</span><span class="grow"><span class="li-title">${esc(r.name)}</span><br><span class="li-sub">${n} ingrédient${n > 1 ? 's' : ''} en commun · ${Math.round(pr.kcal)} kcal · ${Math.round(pr.p)} g P par portion</span></span>${I.next}</a>`; }).join('')}`;
+    results += `<div class="card flat"><span class="bold">Envie d'idées plus créatives ?</span><span class="small muted">Copie une demande toute prête avec tes ingrédients et tes macros, puis colle-la dans l'app Claude.</span><button class="btn soft" data-act="copyPrompt">Copier la demande</button></div>`;
+  }
+  return `<h1>Nutrition</h1>${nutriSeg('i')}
+    ${!tg ? `<a class="card pink" href="#/profil"><span class="bold">Calcule d'abord tes besoins</span><span class="small" style="color:var(--pink-deep)">Les portions sont calculées à partir de tes macros du jour.</span></a>` : ''}
+    <div class="card">
+      <h3>Qu'est-ce que j'ai à la maison ?</h3>
+      ${fridge.length ? `<div class="chips">${fridge.map((f) => `<span class="chip pink" style="padding-right:6px">${esc(f.name)}<button data-act="fridgeDel" data-id="${esc(f.id)}" aria-label="Retirer ${esc(f.name)}" style="width:24px;height:24px;border:0;border-radius:12px;background:#fff;color:var(--pink-ink);font-weight:800">×</button></span>`).join('')}</div>` : ''}
+      <label class="search" style="border:2px solid var(--line)">${I.search}<span class="sr">Ajouter un ingrédient</span><input id="fridge-q" type="search" placeholder="+ Ajouter un ingrédient" value="${esc(S.ui.fridgeQ || '')}" data-bind="fridgeQ" autocomplete="off"></label>
+      <div id="fridgeres" class="col" style="gap:6px">${fridgeResults()}</div>
+      <div class="chips">${['petitdej', 'dejeuner', 'collation', 'post', 'diner'].map((m) => `<button class="chip ${meal === m ? 'blue on' : 'blue'}" data-act="ideaMeal" data-v="${m}">${MEALS.find((x) => x.id === m).name}</button>`).join('')}</div>
+      ${mt ? `<span class="pill grey" style="align-self:flex-start">Pour ce repas : ${mt.kcal} kcal · ${mt.p} g P</span>` : ''}
+      ${fridge.length ? '<button class="btn small ghost" data-act="fridgeClear" style="align-self:flex-start">Tout retirer</button>' : ''}</div>
+    ${results || (tg ? '<div class="empty">Ajoute 2 ou 3 ingrédients (par exemple patate douce, poulet, épinards) : l\'app calcule les quantités pour ce repas.</div>' : '')}`;
+}
+const list2 = (arr) => arr.length <= 1 ? (arr[0] || '') : arr.slice(0, -1).join(', ') + ' et ' + arr[arr.length - 1];
+function fridgeResults() {
+  const q = (S.ui.fridgeQ || '').trim(); if (!q) return '';
+  const res = searchFoods(S.foods, q, 6).filter((f) => !(S.fridge || []).includes(f.id));
+  return res.length ? res.map((f) => `<button class="list-item" style="padding:8px 12px" data-act="fridgeAdd" data-id="${esc(f.id)}"><span class="grow li-title" style="font-size:14px">${esc(f.name)}</span><span class="pill pink">Ajouter</span></button>`).join('') : '<span class="small muted">Pas trouvé : crée l\'aliment depuis le journal.</span>';
+}
+function refreshFridgeRes() { const c = document.getElementById('fridgeres'); if (c) c.innerHTML = fridgeResults(); }
+
+function compressImage(file, max = 1080, q = 0.72) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file); const img = new Image();
+    img.onload = () => {
+      const r = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * r); c.height = Math.round(img.height * r);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', q));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Image illisible')); };
+    img.src = url;
+  });
 }
 
 // ---------- Feuilles (fenêtres du bas) ----------
@@ -1069,24 +1216,28 @@ const CHANGE = {
 
 // ---------- Actions nutrition ----------
 Object.assign(A, {
-  soon: () => toast('Les recettes arrivent à la prochaine étape'),
   addFood: (el) => { openSheet({ type: 'food', meal: el.dataset.meal, day: el.dataset.day, q: '', online: null }); setTimeout(() => document.getElementById('food-q')?.focus(), 80); },
   async pickFood(el) {
     const sh = S.sheet; const id = el.dataset.id;
     let food = S.foodMap[id] || (sh.online || []).find((f) => f.id === id) || recentFoods().find((f) => f.id === id);
     if (!food) return;
     if (!S.foodMap[id] && food.origin === 'off') { await db.put('foods', { ...food }); await load(); }
-    openSheet({ type: 'qty', food, meal: sh.meal, day: sh.day, grams: food.portionG || 100 });
+    openSheet({ type: 'qty', food, meal: sh.meal, day: sh.day, grams: food.portionG || 100, target: sh.target, recipeId: sh.recipeId });
   },
   qtySet: (el) => { S.sheet.grams = el.dataset.v; const i = $('#q-g'); if (i) i.value = el.dataset.v; $('#qtymac').innerHTML = qtyMacros(S.sheet); },
   async toggleFav() {
     const id = S.sheet.food.id;
     S.favs = S.favs.includes(id) ? S.favs.filter((x) => x !== id) : [id, ...S.favs];
-    await db.setSetting('favs', S.favs); S.sheet.meal = $('#q-meal').value; renderSheet();
+    await db.setSetting('favs', S.favs); if ($('#q-meal')) S.sheet.meal = $('#q-meal').value; renderSheet();
   },
   async saveEntry() {
     const sh = S.sheet; const grams = parseNum(sh.grams);
     if (!(grams > 0)) { toast('Indique une quantité'); return; }
+    if (sh.target === 'recipe') {
+      const r = S.recipes.find((x) => x.id === sh.recipeId); const f2 = sh.food;
+      await saveRecipe({ ...r, ingredients: [...(r.ingredients || []), { foodId: f2.id, name: f2.name, grams, per: { kcal: f2.kcal, p: f2.p, g: f2.g, l: f2.l } }] }, false);
+      closeSheet(); render(); toast(f2.name + ' ajouté'); return;
+    }
     const old = sh.entryId ? S.journal.find((e) => e.id === sh.entryId) : null;
     const f = sh.food;
     const e = { ...(old || { id: uid(), date: sh.day, createdAt: new Date().toISOString() }), meal: $('#q-meal').value, foodId: f.id, name: f.name, grams,
@@ -1109,7 +1260,7 @@ Object.assign(A, {
       kcal, p: v('p') || 0, g: v('g') || 0, l: v('l') || 0, meal: $('#q-meal').value };
     await db.put('journal', e); closeSheet(); await reload(); toast('Ajouté');
   },
-  newFood: () => { const sh = S.sheet; openSheet({ type: 'newFood', food: { name: sh.q }, meal: sh.meal, day: sh.day }); },
+  newFood: () => { const sh = S.sheet; openSheet({ type: 'newFood', food: { name: sh.q }, meal: sh.meal, day: sh.day, target: sh.target, recipeId: sh.recipeId }); },
   async saveNewFood() {
     const sh = S.sheet; const v = (k) => parseNum($('#nf-' + k).value);
     const name = $('#nf-name').value.trim();
@@ -1119,7 +1270,7 @@ Object.assign(A, {
       portionName: $('#nf-pn').value.trim() || null, portionG: v('pg') || null, origin: 'perso', custom: true };
     if (f.portionName && !f.portionG) f.portionName = null;
     await db.put('foods', f); await load();
-    openSheet({ type: 'qty', food: f, meal: sh.meal, day: sh.day, grams: f.portionG || 100 });
+    openSheet({ type: 'qty', food: f, meal: sh.meal, day: sh.day, grams: f.portionG || 100, target: sh.target, recipeId: sh.recipeId });
   },
   async offSearch() {
     const sh = S.sheet; const q = sh.q.trim(); if (!q) return;
@@ -1180,6 +1331,78 @@ CHANGE.pManual = (el) => {
   refreshProfRes();
 };
 
+
+// ---------- Actions recettes ----------
+const curRecipe = () => S.recipes.find((x) => x.id === route().id);
+async function saveRecipe(r, rerender = true) { await db.put('recipes', r); const i = S.recipes.findIndex((x) => x.id === r.id); if (i >= 0) S.recipes[i] = r; else S.recipes.push(r); if (rerender) render(); }
+Object.assign(A, {
+  recFilter: (el) => { S.ui.recFilter = el.dataset.v; render(); },
+  recTag: (el) => { S.ui.recTag = S.ui.recTag === el.dataset.v ? null : el.dataset.v; render(); },
+  async recipeLink() {
+    let text = '';
+    try { if (navigator.clipboard && navigator.clipboard.readText) text = (await navigator.clipboard.readText()).trim(); } catch (e) { /* refusé */ }
+    const m = text.match(/https?:\/\/\S+/);
+    openSheet({ type: 'recipeLink', url: m ? m[0] : '' });
+  },
+  async saveRecipeLink() {
+    const url = $('#rl-url').value.trim(); const name = $('#rl-name').value.trim();
+    if (!isUrl(url)) { toast('Ce lien ne semble pas valide'); return; }
+    const r = { id: uid(), name: name || 'Recette ' + platformOf(url), url, status: 'atester', tags: [], ingredients: [], servings: 1, createdAt: new Date().toISOString() };
+    await saveRecipe(r, false); closeSheet(); toast('Recette ajoutée'); go('/recette/' + r.id);
+  },
+  recStatus: async (el) => { const r = { ...curRecipe(), status: el.dataset.v }; await saveRecipe(r); },
+  recRate: async (el) => { const r = curRecipe(); const v = Number(el.dataset.v); await saveRecipe({ ...r, rating: r.rating === v ? 0 : v }); },
+  recTagToggle: async (el) => { const r = curRecipe(); const t = r.tags || []; await saveRecipe({ ...r, tags: t.includes(el.dataset.v) ? t.filter((x) => x !== el.dataset.v) : [...t, el.dataset.v] }); },
+  recIngAdd: () => openSheet({ type: 'food', meal: 'diner', day: dayKey(), q: '', online: null, target: 'recipe', recipeId: route().id }),
+  recIngDel: async (el) => { const r = curRecipe(); const ing = [...r.ingredients]; ing.splice(Number(el.dataset.i), 1); await saveRecipe({ ...r, ingredients: ing }); },
+  async recToJournal() {
+    const r = curRecipe(); const n = parseNum($('#r-n').value) || 1; const per = recipeTotals(r).per;
+    S.ui.recMeal = $('#r-meal').value;
+    await db.put('journal', { id: uid(), date: dayKey(), createdAt: new Date().toISOString(), meal: S.ui.recMeal, quick: true, recipeId: r.id,
+      name: `${r.name}${n !== 1 ? ` × ${fmtNum(n)}` : ''}`, kcal: per.kcal * n, p: per.p * n, g: per.g * n, l: per.l * n });
+    await reload(); toast('Ajouté au journal');
+  },
+  async recDelete() { if (!confirm('Supprimer cette recette ?')) return; await db.remove('recipes', route().id); await reload(); go('/atester'); },
+  ideaMeal: (el) => { S.ui.ideaMeal = el.dataset.v; render(); },
+  async fridgeAdd(el) { S.fridge = [...(S.fridge || []), el.dataset.id]; S.ui.fridgeQ = ''; await db.setSetting('fridge', S.fridge); render(); setTimeout(() => document.getElementById('fridge-q')?.focus(), 30); },
+  async fridgeDel(el) { S.fridge = S.fridge.filter((x) => x !== el.dataset.id); await db.setSetting('fridge', S.fridge); render(); },
+  async fridgeClear() { S.fridge = []; await db.setSetting('fridge', []); render(); },
+  currentPlate() {
+    const meal = S.ui.ideaMeal || defaultIdeaMeal(); const k = dayKey();
+    const mt = mealTarget(meal, targetsFor(k), sumMacros(entriesOf(k).filter((e) => e.meal !== meal)));
+    const foods = S.fridge.map((id) => S.foodMap[id]).filter(Boolean);
+    return { meal, plate: buildPlate(foods, mt), mt, foods };
+  },
+  async plateToJournal() {
+    const { meal, plate } = A.currentPlate(); const now = Date.now();
+    await db.putMany('journal', plate.items.map((i, n) => ({ id: uid(), date: dayKey(), createdAt: new Date(now + n).toISOString(), updatedAt: new Date().toISOString(), meal, foodId: i.food.id, name: i.food.name, grams: i.grams,
+      per: { kcal: i.food.kcal, p: i.food.p, g: i.food.g, l: i.food.l }, portionName: i.food.portionName || null, portionG: i.food.portionG || null, quick: false })));
+    await reload(); toast('Ajouté au journal'); go('/nutrition');
+  },
+  async plateToRecipe() {
+    const { plate } = A.currentPlate(); const ideas = prepIdeas(plate.groups);
+    const r = { id: uid(), name: (ideas[0] ? ideas[0].name + ' ' : '') + ['prot', 'carb', 'veg'].flatMap((role) => plate.items.filter((i) => roleOf(i.food) === role)).map((i) => i.food.name.replace(/^blanc de /i, '').replace(/ (crus?|crues?|cuits?|cuites?)$/i, '').toLowerCase()).slice(0, 2).join(' & '),
+      status: 'validee', tags: ['Repas'], servings: 1, steps: ideas.map((d) => `${d.name} : ${d.steps}`).join('\n\n'), createdAt: new Date().toISOString(),
+      ingredients: plate.items.map((i) => ({ foodId: i.food.id, name: i.food.name, grams: i.grams, per: { kcal: i.food.kcal, p: i.food.p, g: i.food.g, l: i.food.l } })) };
+    await saveRecipe(r, false); toast('Recette enregistrée'); go('/recette/' + r.id);
+  },
+  async copyPrompt() {
+    const { meal, mt, foods } = A.currentPlate();
+    const txt = aiPrompt({ goalLabel: (GOALS[S.profile.goal] || GOALS.maintien).label, mealLabel: MEALS.find((m) => m.id === meal).name, target: mt, foods });
+    try { await navigator.clipboard.writeText(txt); toast('Copié : colle-le dans l\'app Claude'); } catch (e) { openSheet({ type: 'promptText', text: txt }); }
+  },
+});
+async function newRecipeFromImage(el, setOnCurrent) {
+  const f = el.files && el.files[0]; if (!f) return;
+  toast('Préparation de l\'image…');
+  const image = await compressImage(f); el.value = '';
+  if (setOnCurrent) { await saveRecipe({ ...curRecipe(), image }); return; }
+  const r = { id: uid(), name: '', image, kind: el.dataset.kind, status: 'atester', tags: [], ingredients: [], servings: 1, createdAt: new Date().toISOString() };
+  await saveRecipe(r, false); go('/recette/' + r.id); setTimeout(() => document.querySelector('[data-rec=name]')?.focus(), 100);
+}
+CHANGE.recipeImage = (el) => newRecipeFromImage(el, false);
+CHANGE.recipeImageSet = (el) => newRecipeFromImage(el, true);
+
 // ---------- Écouteurs ----------
 document.addEventListener('click', (ev) => {
   const el = ev.target.closest('[data-act]');
@@ -1192,6 +1415,9 @@ let saveT = null;
 document.addEventListener('input', (ev) => {
   const el = ev.target;
   if (el.dataset.bind === 'libQuery') { S.ui.libQuery = el.value; refreshLibBody(); return; }
+  if (el.dataset.bind === 'fridgeQ') { S.ui.fridgeQ = el.value; refreshFridgeRes(); return; }
+  if (el.dataset.rec) { const r = curRecipe(); if (!r) return; const f = el.dataset.rec; r[f] = f === 'servings' ? (parseNum(el.value) || 1) : el.value; clearTimeout(saveT); saveT = setTimeout(() => saveRecipe(r, false), 500); if (f === 'servings') { const c = document.getElementById('recper'); if (c) c.innerHTML = recPerHtml(r); } return; }
+  if (el.dataset.ring !== undefined) { const r = curRecipe(); if (!r) return; r.ingredients[Number(el.dataset.ring)].grams = parseNum(el.value) || 0; clearTimeout(saveT); saveT = setTimeout(() => saveRecipe(r, false), 500); const c = document.getElementById('recper'); if (c) c.innerHTML = recPerHtml(r); return; }
   if (el.dataset.bind === 'foodQuery' && S.sheet) { S.sheet.q = el.value; S.sheet.online = null; S.sheet.error = null; refreshFoodRes(); return; }
   if (el.dataset.bind === 'qtyGrams' && S.sheet) { S.sheet.grams = el.value; const m = document.getElementById('qtymac'); if (m) m.innerHTML = qtyMacros(S.sheet); return; }
   if (el.dataset.prof && S.pdraft) { const f = el.dataset.prof; S.pdraft[f] = f === 'activity' ? el.value : (parseNum(el.value) ?? ''); if (!S.pdraft.manual) refreshProfRes(); return; }
