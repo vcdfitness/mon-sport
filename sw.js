@@ -1,9 +1,9 @@
 // Mode hors connexion : l'app reste utilisable à la salle même sans réseau.
 // Changer VERSION à chaque mise à jour pour que les téléphones récupèrent les nouveaux fichiers.
-const VERSION = 'v1.2.1';
+const VERSION = 'v1.4.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './app.css',
-  './app.js', './db.js', './seed.js', './score.js', './nutrition.js', './foods.js',
+  './app.js', './db.js', './seed.js', './score.js', './freedb.js', './nutrition.js', './foods.js',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png',
 ];
 
@@ -12,7 +12,7 @@ self.addEventListener('install', (e) => {
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== 'shell-' + VERSION && k !== 'fonts').map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== 'shell-' + VERSION && k !== 'fonts' && k !== 'exo-img').map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (e) => {
@@ -24,6 +24,15 @@ self.addEventListener('fetch', (e) => {
       const hit = await c.match(e.request);
       if (hit) return hit;
       try { const res = await fetch(e.request); if (res.ok || res.type === 'opaque') c.put(e.request, res.clone()); return res; } catch (err) { return hit || Response.error(); }
+    }));
+    return;
+  }
+  // Images de la bibliothèque libre : gardées en cache après le premier affichage (utilisables à la salle sans réseau).
+  if (url.hostname === 'raw.githubusercontent.com' && /\.(jpe?g|png|gif)$/i.test(url.pathname)) {
+    e.respondWith(caches.open('exo-img').then(async (c) => {
+      const hit = await c.match(e.request);
+      if (hit) return hit;
+      try { const res = await fetch(e.request); if (res.ok || res.type === 'opaque') c.put(e.request, res.clone()); return res; } catch (err) { return Response.error(); }
     }));
     return;
   }

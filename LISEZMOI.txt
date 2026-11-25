@@ -1,4 +1,4 @@
-MON SPORT & NUTRITION — version 1.2.1 (séances, nutrition, recettes, poids)
+MON SPORT & NUTRITION — version 1.4.0 (séances, exercices illustrés, nutrition, journée type, recettes, poids)
 
 Ce dossier contient toute l'application. Il ne contient aucune donnée personnelle :
 tes séances, vidéos et records sont enregistrés uniquement sur ton iPhone.
@@ -7,7 +7,7 @@ MISE EN LIGNE (GitHub Pages, gratuit)
 1. Crée un compte sur https://github.com
 2. Bouton « + » en haut à droite > New repository > nom : mon-sport > Public > Create repository
 3. Lien « uploading an existing file » > glisse TOUT le contenu de ce dossier
-   (les 14 fichiers, tous au même niveau) > Commit changes
+   (les 15 fichiers, tous au même niveau) > Commit changes
 4. Settings > Pages > Source : Deploy from a branch > Branch : main, dossier / (root) > Save
 5. Après 1 à 2 minutes, l'adresse s'affiche : https://TON-PSEUDO.github.io/mon-sport/
 

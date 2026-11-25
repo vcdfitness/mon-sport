@@ -138,6 +138,8 @@ export const FOODS = [
   ['Barre de céréales', 400, 6, 68, 11, '1 barre', 25],
   ['Biscuits secs (petit-beurre)', 440, 7.5, 75, 12, '1 biscuit', 8],
   ['Cookie', 490, 5.5, 64, 23, '1 cookie', 25],
+  ['Briochette', 375, 8, 50, 15, '1 briochette', 40],
+  ['Pain au lait', 350, 9, 54, 10, '1 pain au lait', 35],
   ['Croissant', 410, 8, 45, 21, '1 croissant', 60],
   ['Pain au chocolat', 420, 7.5, 47, 22, '1 pain au chocolat', 65],
   ['Chips', 540, 6, 50, 34],
@@ -154,6 +156,7 @@ export const FOODS = [
   ['Bière', 43, 0.4, 3.6, 0, '1 demi', 250],
   ['Vin rouge', 85, 0.1, 2.6, 0, '1 verre', 125],
   ['Café noir', 2, 0.1, 0, 0, '1 tasse', 100],
+  ['Café au lait (demi-écrémé)', 25, 1.7, 2.5, 0.8, '1 tasse', 200],
   // Plats et sauces
   ['Pizza margherita', 250, 10, 30, 9, '1 part', 125],
   ['Lasagnes bolognaise', 150, 8, 13, 7, '1 part', 300],

@@ -209,3 +209,102 @@ export function aiPrompt({ goalLabel, mealLabel, target, foods }) {
 J'ai à la maison : ${foods.map((f) => f.name.toLowerCase()).join(', ')}.
 Propose-moi 3 recettes simples (30 min maximum) avec ces ingrédients (et éventuellement des basiques du placard : épices, sauce soja, ail…). Pour chacune : les quantités en grammes pour rentrer dans ces macros, les étapes courtes, et le total kcal / protéines / glucides / lipides.`;
 }
+
+// ---------- Ma journée type : prises de repas, optimisation et conseils ----------
+// Rythme décrit par l'utilisatrice : petit-déjeuner très tôt, collation en milieu de matinée,
+// un seul vrai repas après la séance de l'après-midi.
+export const MY_RHYTHM = [
+  { id: 'petitdej', name: 'Petit-déjeuner', time: '07:30' },
+  { id: 'collation', name: 'Collation', time: '10:30' },
+  { id: 'repas', name: 'Repas après la séance', time: '16:30' },
+];
+export const CLASSIC_PLAN = [
+  { id: 'petitdej', name: 'Petit-déjeuner', time: '07:30' },
+  { id: 'dejeuner', name: 'Déjeuner', time: '12:30' },
+  { id: 'collation', name: 'Collation', time: '16:30' },
+  { id: 'diner', name: 'Dîner', time: '19:30' },
+];
+export const DEFAULT_TRAINING = { time: '15:00', minutes: 75 };
+export const toMin = (t) => { const [h, m] = String(t || '12:00').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+export const fmtTime = (t) => { const [h, m] = String(t || '').split(':'); return `${Number(h)}h${m && m !== '00' ? m : ''}`; };
+const fmtDur = (min) => { const h = Math.floor(min / 60); const m = Math.round(min % 60); return h ? `${h} h${m ? ' ' + String(m).padStart(2, '0') : ''}` : `${m} min`; };
+
+// Attribue un rôle à chaque prise selon l'heure et la séance, puis répartit les macros.
+export function optimizePlan(meals, { train, training = DEFAULT_TRAINING, targets, weight }) {
+  const sorted = [...meals].sort((a, b) => toMin(a.time) - toMin(b.time));
+  const tStart = toMin(training.time); const tEnd = tStart + (Number(training.minutes) || 75);
+  const info = sorted.map((m, i) => {
+    const t = toMin(m.time);
+    let role = 'main';
+    if (train && t >= tEnd - 20 && t <= tEnd + 150) role = 'post';
+    else if (train && t < tStart && t >= tStart - 120) role = 'pre';
+    else if (i === 0 && t < 10 * 60) role = 'breakfast';
+    else if (/collation|goûter|en-cas|snack/i.test(m.name)) role = 'snack';
+    return { ...m, t, role };
+  });
+  if (!info.length || !targets) return info;
+  const W = { post: 4, main: 3, breakfast: 2.4, pre: 1.6, snack: 1.4 };
+  const sum = info.reduce((a, x) => a + W[x.role], 0);
+  info.forEach((x) => { x.share = W[x.role] / sum; });
+  const cw = { post: 1.3, pre: 1.25, breakfast: 1, main: 0.9, snack: 0.95 };
+  const fw = { post: 0.7, pre: 0.75, breakfast: 1, main: 1.15, snack: 1.1 };
+  const dist = (wmap) => { const raw = info.map((x) => x.share * (train ? wmap[x.role] : 1)); const s = raw.reduce((a, b) => a + b, 0); return raw.map((r) => r / s); };
+  const gS = dist(cw); const lS = dist(fw);
+  // Protéines : au moins ~0,3 g/kg (20 à 25 g) à chaque prise, le reste au prorata.
+  const pmin = Math.min(25, Math.max(15, Math.round(0.3 * (Number(weight) || 60))));
+  let pp = info.map((x) => Math.max(pmin, targets.p * x.share));
+  const over = pp.reduce((a, b) => a + b, 0) - targets.p;
+  if (over > 0) { const flex = pp.map((v) => Math.max(0, v - pmin)); const fs = flex.reduce((a, b) => a + b, 0) || 1; pp = pp.map((v, i) => v - over * flex[i] / fs); }
+  info.forEach((x, i) => {
+    const p = Math.round(pp[i]); const g = Math.round(targets.g * gS[i]); const l = Math.round(targets.l * lS[i]);
+    x.target = { p, g, l, kcal: Math.round(p * 4 + g * 4 + l * 9) };
+  });
+  return info;
+}
+
+export function planInsights(info, { train, training = DEFAULT_TRAINING }) {
+  const out = []; if (!info.length) return out;
+  const tStart = toMin(training.time); const tEnd = tStart + (Number(training.minutes) || 75);
+  const low = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+  if (train) {
+    const before = info.filter((x) => x.t < tStart); const last = before[before.length - 1];
+    if (!last) out.push({ tone: 'tip', text: `Tu t'entraînes à ${fmtTime(training.time)} sans avoir mangé avant : si l'énergie manque, une petite prise 1 à 2 h avant (banane + skyr) aide.` });
+    else if (tStart - last.t >= 240) out.push({ tone: 'tip', text: `Entre ${low(last.name)} (${fmtTime(last.time)}) et ta séance (${fmtTime(training.time)}), il se passe ${fmtDur(tStart - last.t)} sans manger. Si tu manques d'énergie à l'entraînement, rends cette prise plus consistante (féculent + protéines) ou décale-la un peu plus tard. Une petite prise avant la séance reste une option pour plus tard.` });
+    const post = info.find((x) => x.role === 'post');
+    if (post) out.push({ tone: 'ok', text: `${post.name} (${fmtTime(post.time)}) : juste après ta séance, c'est le bon moment pour ton plus gros apport en glucides et en protéines, l'app y place ${post.target ? post.target.g + ' g de glucides et ' + post.target.p + ' g de protéines' : 'la plus grosse part'}.` });
+    else {
+      const next = info.find((x) => x.t >= tEnd);
+      out.push({ tone: 'tip', text: next ? `Après ta séance, ta prochaine prise est ${low(next.name)} à ${fmtTime(next.time)}, soit ${fmtDur(next.t - tEnd)} plus tard. Essaie de manger dans les 2 à 3 h qui suivent la séance.` : 'Rien n\'est prévu après ta séance : ajoute une prise dans les 2 à 3 h qui suivent pour la récupération.' });
+    }
+  }
+  const big = info.filter((x) => x.target && x.target.p > 55);
+  if (big.length) out.push({ tone: 'tip', action: 'addEvening', text: `${big[0].name} doit apporter ${big[0].target.p} g de protéines, c'est beaucoup en une fois. Une collation protéinée en soirée (skyr, fromage blanc) répartirait mieux : l'idéal est 3 à 5 prises de 20 à 40 g.` });
+  const snack = info.find((x) => x.role === 'snack' && x.target && x.target.p >= 12);
+  if (snack) out.push({ tone: 'tip', text: `${snack.name} (${fmtTime(snack.time)}) : une viennoiserie seule apporte surtout glucides et lipides. Ajoute un skyr ou un yaourt grec pour atteindre les ${snack.target.p} g de protéines visés.` });
+  if (info[0].role === 'breakfast' && info[0].target) out.push({ tone: 'ok', text: `Petit-déjeuner tôt avec café : vise environ ${info[0].target.p} g de protéines (skyr, œufs, fromage blanc) pour tenir jusqu'à ${info[1] ? fmtTime(info[1].time) : 'midi'}. Le café ne compte presque pas en calories, sauf avec lait et sucre.` });
+  const last = info[info.length - 1]; const fast = 24 * 60 - last.t + info[0].t;
+  if (fast >= 13 * 60) out.push({ tone: 'info', text: `Ta dernière prise est à ${fmtTime(last.time)} : environ ${fmtDur(fast)} sans manger jusqu'au petit-déjeuner. Ce n'est pas un problème si tu atteins tes objectifs du jour ; sinon, la collation du soir aide.` });
+  return out;
+}
+
+// Idées de repas par rôle, quantités calculées sur l'objectif de la prise.
+const TEMPLATES = {
+  breakfast: [['Skyr nature', "Flocons d'avoine", 'Banane'], ['Œuf entier', 'Pain complet', 'Kiwi'], ['Fromage blanc 3 %', 'Granola', 'Fraises']],
+  snack: [['Briochette', 'Skyr nature'], ['Skyr nature', 'Pomme', 'Amandes'], ['Barre protéinée', 'Banane'], ['Pain complet', 'Jambon blanc', 'Clémentine']],
+  pre: [['Banane', 'Skyr nature'], ['Galette de riz soufflé', 'Blanc de dinde (tranches)', 'Compote sans sucre ajouté']],
+  post: [['Blanc de poulet cru', 'Riz basmati cuit', 'Brocoli cuit', "Huile d'olive"], ['Saumon cru', 'Patate douce crue', 'Haricots verts cuits'], ['Steak haché 5 % cru', 'Pâtes cuites', 'Courgette', "Huile d'olive"], ['Escalope de dinde crue', 'Quinoa cuit', 'Poêlée de légumes surgelés', "Huile d'olive"]],
+  evening: [['Skyr nature', 'Framboises'], ['Fromage blanc 3 %', 'Noix'], ['Cottage cheese', 'Myrtilles']],
+};
+TEMPLATES.main = TEMPLATES.post;
+export function mealIdeas(role, target, foodByName, offset = 0, n = 2) {
+  const list = TEMPLATES[role] || TEMPLATES.main;
+  const out = [];
+  for (let i = 0; i < Math.min(n, list.length); i++) {
+    const names = list[(offset + i) % list.length];
+    const foods = names.map((nm) => foodByName[nm]).filter(Boolean);
+    const locks = {};
+    for (const f of foods) if (f.portionG && roleOf(f) !== 'prot' && !/bol|tranche|portion|c\. à|poignée|verre|dose|pot/.test(f.portionName || '')) locks[f.id] = f.portionG;
+    out.push(buildPlate(foods, target, locks));
+  }
+  return out;
+}
