@@ -2,9 +2,10 @@ import { db, uid } from './db.js';
 import { GROUPS, MUSCLES, SESSION_TYPES, EXERCISES } from './seed.js';
 import { FREEDB_URL, FREEDB_CREDIT, LEVEL, mapFreeDb } from './freedb.js';
 import { computeScore, suggest, applySuggestion, e1rm, scoreLabel } from './score.js';
-import { ACTIVITY, GOALS, MEALS, profileErrors, computeTargets, waterTarget, dayKey, keyToDate, addDays, scale, entryMacros, sumMacros, BUILTIN_FOODS, searchFoods, offUrl, offToFood, roleOf, buildPlate, prepIdeas, aiPrompt, MY_RHYTHM, CLASSIC_PLAN, DEFAULT_TRAINING, toMin, fmtTime, optimizePlan, planInsights, mealIdeas } from './nutrition.js';
+import { ACTIVITY, GOALS, MEALS, profileErrors, computeTargets, waterTarget, dayKey, keyToDate, addDays, scale, entryMacros, sumMacros, BUILTIN_FOODS, searchFoods, offUrl, offToFood, roleOf, buildPlate, prepIdeas, aiPrompt, MY_RHYTHM, CLASSIC_PLAN, DEFAULT_TRAINING, toMin, fmtTime, optimizePlan, planInsights, mealIdeas, isFish, isCookingFat, looksSweet } from './nutrition.js';
+import { RECIPE_IDEAS } from './ideas.js';
 
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 
 // ---------- État ----------
 const S = {
@@ -139,6 +140,7 @@ async function load() {
   S.plan = await db.getSetting('mealPlan', null) || JSON.parse(JSON.stringify(MY_RHYTHM));
   S.training = await db.getSetting('training', null) || { ...DEFAULT_TRAINING };
   S.mealNames = await db.getSetting('mealNames', {});
+  S.noFish = await db.getSetting('noFish', true);
   const order = MUSCLES.map((m) => m.id);
   const rank = (id) => { const i = order.indexOf(id); return i < 0 ? 999 : i; };
   S.muscles.sort((a, b) => rank(a.id) - rank(b.id));
@@ -161,7 +163,7 @@ const go = (h) => { location.hash = h; };
 
 function render() {
   const r = route();
-  const views = { aujourdhui: vToday, seances: vSeances, exercices: vLibrary, exercice: vExercise, seance: vTemplate, encours: vActive, bilan: vSummary, reglages: vSettings, nutrition: vNutrition, profil: vProfile, corps: vCorps, idees: vIdeas, atester: vATester, recette: vRecipe, journee: vJournee };
+  const views = { aujourdhui: vToday, seances: vSeances, exercices: vLibrary, exercice: vExercise, seance: vTemplate, encours: vActive, bilan: vSummary, reglages: vSettings, nutrition: vNutrition, profil: vProfile, corps: vCorps, idees: vIdeas, atester: vATester, recette: vRecipe, journee: vJournee, aliments: vAliments };
   const v = views[r.name] || vToday;
   $('#app').innerHTML = v(r);
   $('#nav').innerHTML = nav(r.name);
@@ -171,7 +173,7 @@ function render() {
 }
 
 function nav(name) {
-  const tab = { aujourdhui: 'a', seances: 's', seance: 's', encours: 's', bilan: 's', exercices: 'e', exercice: 'e', nutrition: 'n', profil: 'n', idees: 'n', atester: 'n', recette: 'n', journee: 'n', corps: 'c', reglages: 'a' }[name] || 'a';
+  const tab = { aujourdhui: 'a', seances: 's', seance: 's', encours: 's', bilan: 's', exercices: 'e', exercice: 'e', nutrition: 'n', profil: 'n', idees: 'n', atester: 'n', recette: 'n', journee: 'n', aliments: 'n', corps: 'c', reglages: 'a' }[name] || 'a';
   const it = (k, href, icon, label, pink) => `<a href="#/${href}" class="${tab === k ? 'on' : ''} ${pink ? 'pinkon' : ''}" ${tab === k ? 'aria-current="page"' : ''}>${icon}${label}</a>`;
   return it('a', 'aujourdhui', I.home, "Aujourd'hui") + it('s', S.active ? 'encours' : 'seances', I.dumbbell, 'Séance') + it('e', 'exercices', I.video, 'Exercices') + it('n', 'nutrition', I.food, 'Nutrition', true) + it('c', 'corps', I.chart, 'Corps');
 }
@@ -662,6 +664,7 @@ function vNutrition(r) {
       <div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn small soft" data-act="water" data-day="${k}" data-v="750">+ 1 gourde (75 cl)</button><button class="btn small soft" data-act="water" data-day="${k}" data-v="375">+ ½ gourde</button>
         <button class="btn small ghost" data-act="water" data-day="${k}" data-v="-750" aria-label="Retirer une gourde">− 1 gourde</button></div></div>
     <div class="col" style="gap:10px">${meals}</div>
+    <a class="small bold" href="#/aliments" style="align-self:center">Aide-mémoire des aliments →</a>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn soft-pink" data-act="copyDay" data-day="${k}">Copier la veille</button><button class="btn soft" data-act="quickAdd" data-day="${k}" data-meal="">Saisie rapide</button></div>`;
 }
 
@@ -834,6 +837,16 @@ function nutriSheet(sh) {
       <label class="field"><span>Nom</span><input class="input" id="rl-name" placeholder="Ex. Pâtes crémeuses au skyr"></label>
       <button class="btn pink block" data-act="saveRecipeLink">Ajouter aux recettes à tester</button>`;
   }
+  if (sh.type === 'idea') {
+    const idea = RECIPE_IDEAS.find((i) => i.id === sh.id); const r = ideaRecipe(idea); const { per } = recipeTotals(r);
+    return `<div class="between"><h2 style="font-size:19px">${esc(idea.name)}</h2>${close}</div>
+      <div class="chips"><span class="pill grey">${esc(idea.time)}</span>${idea.tags.map((t) => `<span class="pill pink">${esc(t)}</span>`).join('')}</div>
+      <div class="between bold" style="padding:12px 14px;border-radius:16px;background:#fff"><span>${Math.round(per.kcal)} kcal</span><span class="blue">${Math.round(per.p)} g P</span><span>${Math.round(per.g)} g G</span><span>${Math.round(per.l)} g L</span></div>
+      <div class="card flat" style="gap:0;padding:8px 16px">${r.ingredients.map((i) => `<div class="between small" style="padding:6px 0;border-top:1px solid var(--line)"><span>${esc(i.name)}</span><b>${fmtNum(i.grams)} g</b></div>`).join('')}</div>
+      <div class="small" style="white-space:pre-line;color:var(--ink-2)">${esc(idea.steps)}</div>
+      <span class="tiny muted">Tu pourras ajuster les quantités à tes macros une fois la recette ajoutée.</span>
+      <button class="btn pink block" data-act="ideaSave" data-id="${idea.id}">Ajouter à mes recettes à tester</button>`;
+  }
   if (sh.type === 'promptText') {
     return `<div class="between"><h2>Demande à copier</h2>${close}</div><span class="small muted">Sélectionne le texte, copie-le et colle-le dans l'app Claude.</span>
       <textarea class="input" style="min-height:220px" readonly>${esc(sh.text)}</textarea>`;
@@ -888,7 +901,7 @@ function vJournee() {
   for (const m of info) {
     if (!seanceShown && m.t >= tStart) { blocks.push(seanceBlock(endStr)); seanceShown = true; }
     const off = (S.ui.ideaOff || {})[m.id] || 0;
-    const ideas = m.target ? mealIdeas(m.role, m.target, byName, off, 1) : [];
+    const ideas = m.target ? mealIdeas(m.role, m.target, byName, off, 1, { noFish: S.noFish }) : [];
     blocks.push(`<div class="card flat" style="gap:8px">
       <div class="between"><div class="row" style="gap:10px"><span class="display" style="font-size:20px;color:var(--pink-ink)">${fmtTime(m.time)}</span><div class="col" style="gap:0"><span class="bold">${esc(m.name)}</span>${ROLE_LABEL[m.role].toLowerCase() !== m.name.toLowerCase() ? `<span class="tiny muted">${ROLE_LABEL[m.role]}</span>` : ''}</div></div>
         ${m.target ? `<span class="pill pink">${m.target.kcal} kcal</span>` : ''}</div>
@@ -923,6 +936,50 @@ function vJournee() {
 }
 function seanceBlock(endStr) {
   return `<div class="row" style="gap:10px;padding:10px 16px;border-radius:20px;background:var(--blue);color:#fff">${I.dumbbell}<span class="bold">Séance · ${fmtTime(S.training.time)} – ${fmtTime(endStr)}</span></div>`;
+}
+
+// ---------- Aide-mémoire des aliments ----------
+const ALI_TABS = [['prot', 'Protéines'], ['carb', 'Glucides'], ['fat', 'Lipides'], ['veg', 'Fruits & légumes']];
+const ALI_TIPS = {
+  prot: 'Sources riches en protéines, classées par protéines pour 100 kcal : les premières nourrissent le muscle sans trop de calories.',
+  carb: "L'énergie pour tes séances : place-les surtout au repas après la séance. Les versions complètes calent plus longtemps.",
+  fat: 'Indispensables (hormones, vitamines) mais très caloriques : pèse-les, 10 g d\'huile = 90 kcal.',
+  veg: 'Peu caloriques, riches en fibres et en vitamines : à volonté ou presque.',
+};
+function vAliments() {
+  const tab = S.ui.aliTab || 'prot';
+  let list = S.foods.filter((f) => roleOf(f) === tab && !(S.noFish && isFish(f)) && f.kcal > 0);
+  const q = (S.ui.aliQ || '').trim();
+  if (q) list = searchFoods(list, q, 200);
+  const key = { prot: (f) => f.p / Math.max(1, f.kcal), carb: (f) => f.g, fat: (f) => f.l, veg: (f) => -f.kcal }[tab];
+  list = [...list].sort((a, b) => key(b) - key(a));
+  const main = { prot: 'p', carb: 'g', fat: 'l', veg: 'kcal' }[tab];
+  const rows = list.map((f) => `<div class="between small" style="padding:8px 0;border-top:1px solid var(--line);gap:10px">
+      <span class="grow"><span class="bold">${esc(f.name)}</span><br><span class="tiny muted">${r0(f.kcal)} kcal · P ${fmtNum(f.p)} · G ${fmtNum(f.g)} · L ${fmtNum(f.l)}${f.portionName ? ` · ${esc(f.portionName)} = ${fmtNum(f.portionG)} g` : ''}</span></span>
+      <span class="pill ${tab === 'prot' ? '' : 'pink'}" style="flex-shrink:0">${main === 'kcal' ? r0(f.kcal) + ' kcal' : fmtNum(f[main]) + ' g'}</span></div>`).join('');
+  return `<div class="between"><button class="icon-btn" data-act="back" aria-label="Retour">${I.back}</button><h3>Aide-mémoire</h3><span style="width:44px"></span></div>
+    <div class="seg pinkseg" style="grid-auto-columns:auto">${ALI_TABS.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-act="aliTab" data-v="${k}">${l}</button>`).join('')}</div>
+    <span class="small muted">${ALI_TIPS[tab]} Valeurs pour 100 g.</span>
+    <label class="search">${I.search}<span class="sr">Filtrer</span><input type="search" placeholder="Filtrer…" value="${esc(q)}" data-bind="aliQ" autocomplete="off"></label>
+    <label class="row small bold" style="min-height:40px"><input type="checkbox" data-act-change="noFish" ${S.noFish ? 'checked' : ''} style="width:22px;height:22px"> Sans poisson ni fruits de mer</label>
+    <div class="card flat" style="gap:0;padding:6px 16px" id="alilist">${rows || '<span class="small muted" style="padding:10px 0">Aucun aliment.</span>'}</div>`;
+}
+// ---------- Idées de recettes à tester ----------
+function ideaRecipe(idea) {
+  const byName = foodsByName();
+  const ingredients = idea.ingredients.map(([nm, g]) => { const f = byName[nm]; return f ? { foodId: f.id, name: f.name, grams: g, per: { kcal: f.kcal, p: f.p, g: f.g, l: f.l } } : null; }).filter(Boolean);
+  return { name: idea.name, ingredients, servings: 1, steps: idea.steps, tags: idea.tags, ideaId: idea.id, time: idea.time };
+}
+function ideasSection() {
+  const added = new Set(S.recipes.map((r) => r.ideaId).filter(Boolean));
+  const tag = S.ui.recTag;
+  const list = RECIPE_IDEAS.filter((i) => !added.has(i.id) && (!tag || i.tags.includes(tag)) && !(S.noFish && i.ingredients.some(([nm]) => { const f = foodsByName()[nm]; return f && isFish(f); })));
+  if (!list.length) return '';
+  const shown = S.ui.ideasAll ? list : list.slice(0, 4);
+  return `<div class="between"><span class="label">Idées à essayer</span><span class="tiny muted">${list.length} recettes</span></div>
+    ${shown.map((i) => { const r = ideaRecipe(i); const pr = recipeTotals(r).per; return `<button class="list-item" data-act="ideaOpen" data-id="${i.id}"><span class="thumb pink">${I.food}</span>
+      <span class="grow"><span class="li-title" style="font-size:14px">${esc(i.name)}</span><br><span class="li-sub">${esc(i.time)} · ${Math.round(pr.kcal)} kcal · ${Math.round(pr.p)} g de protéines</span></span>${I.next}</button>`; }).join('')}
+    ${!S.ui.ideasAll && list.length > 4 ? `<button class="btn small ghost" style="align-self:flex-start" data-act="ideasAll">Voir les ${list.length - 4} autres idées</button>` : ''}`;
 }
 
 // ---------- Recettes ----------
@@ -968,7 +1025,8 @@ function vATester() {
       ${fileBtn('Photo', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>', true)}</div>
     <div class="chips scroll">${[['all', 'Toutes'], ...Object.entries(RSTATUS).map(([k, v]) => [k, v.label])].map(([k, l]) => `<button class="chip ${f === k ? 'on' : ''}" data-act="recFilter" data-v="${k}">${l} · ${counts[k]}</button>`).join('')}</div>
     <div class="chips scroll">${RTAGS.map((t) => `<button class="chip ${tag === t ? 'pink on' : 'pink'}" data-act="recTag" data-v="${t}">${t}</button>`).join('')}</div>
-    ${cards ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>` : `<div class="empty">${S.recipes.length ? 'Aucune recette pour ce filtre.' : 'Ajoute ta première recette repérée sur les réseaux : lien de la vidéo, capture d\'écran ou photo du plat.'}</div>`}`;
+    ${cards ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">${cards}</div>` : `<div class="empty">${S.recipes.length ? 'Aucune recette pour ce filtre.' : 'Ajoute ta première recette repérée sur les réseaux : lien de la vidéo, capture d\'écran ou photo du plat.'}</div>`}
+    ${f === 'all' || f === 'atester' ? ideasSection() : ''}`;
 }
 
 function vRecipe(r0id) {
@@ -1011,8 +1069,8 @@ function vIdeas() {
   let results = '';
   if (fridge.length && mt) {
     const locks = S.ui.plateLocks || {};
-    const plate = buildPlate(fridge, mt, locks);
-    const ideas = prepIdeas(plate.groups);
+    const plate = buildPlate(fridge, mt, locks, { sweet: ideaSweet(meal, k, fridge) });
+    const ideas = prepIdeas(plate.groups, plate.sweet);
     const t = plate.tot;
     results = `<div class="card">
       <div class="between"><h3>Ton assiette calculée</h3><span class="pill">${esc(mealLabel)}</span></div>
@@ -1022,7 +1080,9 @@ function vIdeas() {
       ${Object.keys(locks).length ? '<button class="btn small ghost" data-act="plateReset" style="align-self:flex-start">Revenir au calcul automatique</button>' : ''}
       <div class="between bold" style="padding:10px 12px;border-radius:16px;background:var(--bg)"><span>${Math.round(t.kcal)} kcal</span><span class="blue">${Math.round(t.p)} g P</span><span>${Math.round(t.g)} g G</span><span>${Math.round(t.l)} g L</span></div>
       <span class="tiny muted">Objectif du repas : ${mt.kcal} kcal · ${mt.p} g P · ${mt.g} g G · ${mt.l} g L. Les poids sont ceux des aliments tels qu'indiqués (cru ou cuit).</span>
-      ${plate.missing.length ? `<span class="small pink bold">Pour un repas complet, il manque ${list2(plate.missing)}.</span>` : ''}
+      ${plate.missing.length ? `<span class="small pink bold">Pour ${plate.sweet ? 'tenir jusqu\'à la prochaine prise' : 'un repas complet'}, il manque ${list2(plate.missing)}.</span>` : ''}
+      ${plate.skipped.length ? `<span class="tiny muted">${esc(list2(plate.skipped.map((f) => f.name)))} : pas utilisée, rien à cuire dans ce repas.</span>` : ''}
+      <span class="label" style="margin-top:4px">${ideas.length > 1 ? ideas.length + ' façons de le préparer' : 'Préparation'}</span>
       ${ideas.map((d) => `<div class="col" style="gap:4px;padding:12px 14px;border-radius:18px;background:var(--pink-soft)"><span class="bold" style="color:var(--pink-deep)">${esc(d.name)} · ${d.time}</span><span class="small" style="color:var(--pink-deep)">${esc(d.steps)}</span></div>`).join('')}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn pink" data-act="plateToJournal">Ajouter à « ${esc(mealLabel)} »</button><button class="btn soft-pink" data-act="plateToRecipe">Garder la recette</button></div></div>`;
     const mine = S.recipes.map((r) => ({ r, n: (r.ingredients || []).filter((i) => S.fridge.includes(i.foodId)).length })).filter((x) => x.n).sort((a, b) => b.n - a.n).slice(0, 4);
@@ -1039,9 +1099,16 @@ function vIdeas() {
       <div class="chips">${planMeals().map((m) => `<button class="chip ${meal === m.id ? 'blue on' : 'blue'}" data-act="ideaMeal" data-v="${m.id}">${esc(m.name)}</button>`).join('')}</div>
       ${mt ? `<span class="pill grey" style="align-self:flex-start">Pour ce repas : ${mt.kcal} kcal · ${mt.p} g P</span>` : ''}
       ${fridge.length ? '<button class="btn small ghost" data-act="fridgeClear" style="align-self:flex-start">Tout retirer</button>' : ''}</div>
+    <a class="list-item" href="#/aliments"><span class="thumb">${I.food}</span><span class="grow"><span class="li-title">Aide-mémoire des aliments</span><br><span class="li-sub">Protéines, glucides, lipides, fruits et légumes</span></span>${I.next}</a>
     ${results || (tg ? '<div class="empty">Ajoute 2 ou 3 ingrédients (par exemple patate douce, poulet, épinards) : l\'app calcule les quantités pour ce repas.</div>' : '')}`;
 }
 const list2 = (arr) => arr.length <= 1 ? (arr[0] || '') : arr.slice(0, -1).join(', ') + ' et ' + arr[arr.length - 1];
+function ideaSweet(meal, k, foods) {
+  const m = dayPlan(k).find((x) => x.id === meal);
+  if (m && ['breakfast', 'snack', 'pre'].includes(m.role)) return true;
+  if (m && ['post', 'main'].includes(m.role) && !looksSweet(foods)) return false;
+  return looksSweet(foods);
+}
 function fridgeResults() {
   const q = (S.ui.fridgeQ || '').trim(); if (!q) return '';
   const res = searchFoods(S.foods, q, 6).filter((f) => !(S.fridge || []).includes(f.id));
@@ -1467,6 +1534,14 @@ CHANGE.pManual = (el) => {
 const curRecipe = () => S.recipes.find((x) => x.id === route().id);
 async function saveRecipe(r, rerender = true) { await db.put('recipes', r); const i = S.recipes.findIndex((x) => x.id === r.id); if (i >= 0) S.recipes[i] = r; else S.recipes.push(r); if (rerender) render(); }
 Object.assign(A, {
+  aliTab: (el) => { S.ui.aliTab = el.dataset.v; render(); },
+  ideasAll: () => { S.ui.ideasAll = true; render(); },
+  ideaOpen: (el) => openSheet({ type: 'idea', id: el.dataset.id }),
+  async ideaSave(el) {
+    const idea = RECIPE_IDEAS.find((i) => i.id === el.dataset.id);
+    const r = { id: uid(), ...ideaRecipe(idea), status: 'atester', createdAt: new Date().toISOString() };
+    await saveRecipe(r, false); closeSheet(); toast('Ajoutée à tes recettes à tester'); go('/recette/' + r.id);
+  },
   recFilter: (el) => { S.ui.recFilter = el.dataset.v; render(); },
   recTag: (el) => { S.ui.recTag = S.ui.recTag === el.dataset.v ? null : el.dataset.v; render(); },
   async recipeLink() {
@@ -1503,7 +1578,7 @@ Object.assign(A, {
     const meal = S.ui.ideaMeal || defaultIdeaMeal(); const k = dayKey();
     const mt = ideaTarget(meal, k);
     const foods = S.fridge.map((id) => S.foodMap[id]).filter(Boolean);
-    return { meal, plate: buildPlate(foods, mt, S.ui.plateLocks || {}), mt, foods };
+    return { meal, plate: buildPlate(foods, mt, S.ui.plateLocks || {}, { sweet: ideaSweet(meal, k, foods) }), mt, foods };
   },
   async plateToJournal() {
     const { meal, plate } = A.currentPlate(); const now = Date.now();
@@ -1512,7 +1587,7 @@ Object.assign(A, {
     await reload(); toast('Ajouté au journal'); go('/nutrition');
   },
   async plateToRecipe() {
-    const { plate } = A.currentPlate(); const ideas = prepIdeas(plate.groups);
+    const { plate } = A.currentPlate(); const ideas = prepIdeas(plate.groups, plate.sweet);
     const r = { id: uid(), name: (ideas[0] ? ideas[0].name + ' ' : '') + ['prot', 'carb', 'veg'].flatMap((role) => plate.items.filter((i) => roleOf(i.food) === role)).map((i) => i.food.name.replace(/^blanc de /i, '').replace(/ (crus?|crues?|cuits?|cuites?)$/i, '').toLowerCase()).slice(0, 2).join(' & '),
       status: 'validee', tags: ['Repas'], servings: 1, steps: ideas.map((d) => `${d.name} : ${d.steps}`).join('\n\n'), createdAt: new Date().toISOString(),
       ingredients: plate.items.map((i) => ({ foodId: i.food.id, name: i.food.name, grams: i.grams, per: { kcal: i.food.kcal, p: i.food.p, g: i.food.g, l: i.food.l } })) };
@@ -1532,6 +1607,7 @@ async function newRecipeFromImage(el, setOnCurrent) {
   const r = { id: uid(), name: '', image, kind: el.dataset.kind, status: 'atester', tags: [], ingredients: [], servings: 1, createdAt: new Date().toISOString() };
   await saveRecipe(r, false); go('/recette/' + r.id); setTimeout(() => document.querySelector('[data-rec=name]')?.focus(), 100);
 }
+CHANGE.noFish = async (el) => { S.noFish = el.checked; await db.setSetting('noFish', S.noFish); render(); };
 CHANGE.recipeImage = (el) => newRecipeFromImage(el, false);
 CHANGE.recipeImageSet = (el) => newRecipeFromImage(el, true);
 
@@ -1547,7 +1623,7 @@ Object.assign(A, {
     let tg = targetsFor(k);
     if (train !== isTrainDay(k)) { const t = computeTargets(S.profile, currentWeight()); tg = (S.profile.manual && S.profile.manual[train ? 'train' : 'rest']) || t[train ? 'train' : 'rest']; }
     const m = optimizePlan(planMeals(), { train, training: S.training, targets: tg, weight: currentWeight() }).find((x) => x.id === id);
-    const pl = mealIdeas(m.role, m.target, foodsByName(), (S.ui.ideaOff || {})[id] || 0, 1)[0];
+    const pl = mealIdeas(m.role, m.target, foodsByName(), (S.ui.ideaOff || {})[id] || 0, 1, { noFish: S.noFish })[0];
     const now = Date.now();
     await db.putMany('journal', pl.items.map((i, n) => ({ id: uid(), date: k, createdAt: new Date(now + n).toISOString(), updatedAt: new Date().toISOString(), meal: id, foodId: i.food.id, name: i.food.name, grams: i.grams,
       per: { kcal: i.food.kcal, p: i.food.p, g: i.food.g, l: i.food.l }, portionName: i.food.portionName || null, portionG: i.food.portionG || null, quick: false })));
@@ -1578,6 +1654,7 @@ let saveT = null;
 document.addEventListener('input', (ev) => {
   const el = ev.target;
   if (el.dataset.bind === 'libQuery') { S.ui.libQuery = el.value; refreshLibBody(); return; }
+  if (el.dataset.bind === 'aliQ') { S.ui.aliQ = el.value; const c = document.getElementById('alilist'); if (c) { const tmp = document.createElement('div'); tmp.innerHTML = vAliments(); const n = tmp.querySelector('#alilist'); if (n) c.innerHTML = n.innerHTML; } return; }
   if (el.dataset.bind === 'fridgeQ') { S.ui.fridgeQ = el.value; refreshFridgeRes(); return; }
   if (el.dataset.rec) { const r = curRecipe(); if (!r) return; const f = el.dataset.rec; r[f] = f === 'servings' ? (parseNum(el.value) || 1) : el.value; clearTimeout(saveT); saveT = setTimeout(() => saveRecipe(r, false), 500); if (f === 'servings') { const c = document.getElementById('recper'); if (c) c.innerHTML = recPerHtml(r); } return; }
   if (el.dataset.ring !== undefined) { const r = curRecipe(); if (!r) return; r.ingredients[Number(el.dataset.ring)].grams = parseNum(el.value) || 0; clearTimeout(saveT); saveT = setTimeout(() => saveRecipe(r, false), 500); const c = document.getElementById('recper'); if (c) c.innerHTML = recPerHtml(r); return; }

@@ -144,12 +144,26 @@ export function roleOf(f) {
 const round5 = (x) => Math.max(0, Math.round(x / 5) * 5);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 
+// Aliments à exclure (préférence « sans poisson ni fruits de mer »).
+export const isFish = (f) => /saumon|thon|cabillaud|crevette|sardine|sushi|maki|poisson|colin|merlu|truite|moule/i.test(f.name);
+export const isCookingFat = (f) => /huile|beurre/i.test(f.name);
+// Ingrédients qui se cuisinent (donc qui justifient une matière grasse de cuisson).
+const needsCooking = (f) => /(cru|crue|crus|crues)$|steak|escalope|tofu|œuf|lardon|seitan|courgette|aubergine|poivron|champignon|oignon|patate|pomme de terre|poêlée/i.test(f.name) && !/^(fromage|skyr|yaourt)/i.test(f.name);
+// Contexte sucré / petit-déjeuner : laitages, fruits, céréales, pain, sans rien à cuire.
+export const looksSweet = (foods) => foods.length > 0 && !foods.some(needsCooking) && foods.some((f) => /skyr|fromage blanc|yaourt|cottage|flocons|granola|muesli|banane|pomme|fruit|fraise|framboise|myrtille|kiwi|lait|pain|brioche|compote|miel/i.test(f.name));
+
 // Calcule les grammes de chaque ingrédient pour approcher l'objectif du repas.
-// locks = { idAliment: grammes } : quantités choisies par l'utilisatrice, gardées telles quelles ;
-// les autres ingrédients sont ajustés autour.
-export function buildPlate(foods, target, locks = {}) {
+// locks = { idAliment: grammes } : quantités choisies par l'utilisatrice, gardées telles quelles.
+// ctx.sweet = petit-déjeuner ou collation : pas de matière grasse de cuisson, pas de légumes exigés.
+export function buildPlate(foods, target, locks = {}, ctx = {}) {
+  const sweet = ctx.sweet ?? looksSweet(foods);
+  const cooking = !sweet && foods.some(needsCooking);
   const groups = { prot: [], carb: [], veg: [], fat: [] };
-  for (const f of foods) groups[roleOf(f)].push(f);
+  const skipped = [];
+  for (const f of foods) {
+    if (isCookingFat(f) && !cooking && !Object.prototype.hasOwnProperty.call(locks, f.id)) { skipped.push(f); continue; }
+    groups[roleOf(f)].push(f);
+  }
   const items = []; const tot = { kcal: 0, p: 0, g: 0, l: 0 };
   const add = (f, grams, locked = false) => {
     grams = locked ? Math.max(0, Number(grams) || 0) : round5(grams); if (grams <= 0 && !locked) return;
@@ -160,7 +174,7 @@ export function buildPlate(foods, target, locks = {}) {
   for (const f of foods) if (isLocked(f)) add(f, locks[f.id], true);
   const free = (role) => groups[role].filter((f) => !isLocked(f));
   const vegs = free('veg').slice(0, 3);
-  for (const f of vegs) add(f, vegs.length === 1 ? 150 : 100);
+  for (const f of vegs) add(f, sweet ? 100 : vegs.length === 1 ? 150 : 100);
   const prot = free('prot');
   if (prot.length) {
     const need = Math.max(0, target.p - tot.p) * 0.9;
@@ -169,39 +183,63 @@ export function buildPlate(foods, target, locks = {}) {
   const carb = free('carb');
   if (carb.length) {
     const need = Math.max(0, target.g - tot.g);
-    for (const f of carb) add(f, clamp((need / carb.length) / Math.max(1, f.g) * 100, 0, 350));
+    for (const f of carb) add(f, clamp((need / carb.length) / Math.max(1, f.g) * 100, 0, sweet ? 120 : 350));
   }
   const fat = free('fat');
   if (fat.length) {
     const need = target.l - tot.l;
-    if (need > 3) for (const f of fat) add(f, clamp((need / fat.length) / Math.max(1, f.l) * 100, 5, f.kcal > 800 ? 20 : 40));
+    if (need > 3) for (const f of fat) add(f, clamp((need / fat.length) / Math.max(1, f.l) * 100, 5, isCookingFat(f) ? 15 : f.kcal > 500 ? 25 : 40));
   }
   const order = foods.map((f) => f.id);
   items.sort((a, b) => order.indexOf(a.food.id) - order.indexOf(b.food.id));
   const missing = [];
-  if (!groups.prot.length) missing.push('une source de protéines (poulet, œuf, skyr, tofu…)');
-  if (!groups.carb.length && target.g > 30) missing.push('un féculent (riz, pâtes, pomme de terre…)');
-  if (!groups.veg.length) missing.push('des légumes');
-  return { items, tot, groups, missing };
+  if (!groups.prot.length) missing.push(sweet ? 'un laitage protéiné (skyr, fromage blanc) ou des œufs' : 'une source de protéines (poulet, œuf, tofu…)');
+  if (!sweet && !groups.carb.length && target.g > 30) missing.push('un féculent (riz, pâtes, pomme de terre…)');
+  if (!sweet && !groups.veg.length) missing.push('des légumes');
+  return { items, tot, groups, missing, skipped, sweet };
 }
 
-const shortName = (f) => f.name.replace(/ (cru|crue|cuit|cuite|crus|cuits)$/i, '').toLowerCase();
+const shortName = (f) => f.name.replace(/ (cru|crue|cuit|cuite|crus|cuits|crues|cuites)$/i, '').toLowerCase();
 const list = (arr) => arr.length <= 1 ? (arr[0] || '') : arr.slice(0, -1).join(', ') + ' et ' + arr[arr.length - 1];
 
-// Idées de préparation selon les ingrédients.
-export function prepIdeas(groups) {
-  const P = list(groups.prot.map(shortName)); const C = list(groups.carb.map(shortName));
-  const V = list(groups.veg.map(shortName)); const F = groups.fat[0] ? shortName(groups.fat[0]) : "un filet d'huile";
+// Idées de préparation selon les ingrédients (jusqu'à 4).
+export function prepIdeas(groups, sweet = false) {
+  const all = [...groups.prot, ...groups.carb, ...groups.veg, ...groups.fat];
+  const has = (re) => all.filter((f) => re.test(f.name));
+  const names = (arr) => list(arr.map(shortName));
   const ideas = [];
+  if (sweet) {
+    const dairy = has(/skyr|fromage blanc|yaourt|cottage/i); const oats = has(/flocons|granola|muesli/i);
+    const fruit = groups.veg.concat(has(/banane|mangue|raisin|datte/i)); const nuts = has(/amande|noix|noisette|cacahu|chia|lin|purée d'amande/i);
+    const bread = has(/pain|brioche|galette/i); const eggs = has(/œuf/i); const milk = has(/lait|boisson/i);
+    if (dairy.length) ideas.push({ name: 'Bowl gourmand', time: '3 min', steps: `Verse ${names(dairy)} dans un bol${oats.length ? `, ajoute ${names(oats)}` : ''}${fruit.length ? ` et ${names(fruit)} en morceaux` : ''}${nuts.length ? `, termine avec ${names(nuts)} concassés` : ''}. Une pointe de cannelle ou de vanille relève sans calories.` });
+    if (oats.length && (dairy.length || milk.length)) ideas.push({ name: 'Overnight oats', time: '5 min la veille', steps: `La veille, mélange ${names(oats)} avec ${names([...dairy, ...milk])} dans un bocal${fruit.length ? `, ajoute ${names(fruit)}` : ''}. Le matin, c'est prêt : idéal pour un petit-déjeuner très tôt.` });
+    if (oats.length && milk.length) ideas.push({ name: 'Porridge chaud', time: '5 min', steps: `Fais chauffer ${names(oats)} avec ${names(milk)} 3 à 4 min en remuant${fruit.length ? `, puis ajoute ${names(fruit)}` : ''}.${dairy.length ? ` Ajoute ${names(dairy)} hors du feu pour garder sa texture.` : ''}` });
+    if (fruit.length && (dairy.length || milk.length)) ideas.push({ name: 'Smoothie', time: '3 min', steps: `Mixe ${names(fruit)} avec ${names([...dairy, ...milk])}${oats.length ? ` et ${names(oats)}` : ''}. À emporter si tu pars tôt.` });
+    if (oats.length && eggs.length) ideas.push({ name: 'Pancakes express', time: '10 min', steps: `Mixe ${names(oats)}, ${names(eggs)}${fruit.length ? ` et ${names(fruit)}` : ''}, puis cuis de petites galettes 1 à 2 min par face dans une poêle antiadhésive.` });
+    if (bread.length) ideas.push({ name: 'Tartines', time: '5 min', steps: `Toaste ${names(bread)}${eggs.length ? `, ajoute ${names(eggs)} brouillés ou au plat` : dairy.length ? `, tartine de ${names(dairy)}` : ''}${fruit.length ? ` et ${names(fruit)} en lamelles` : ''}.` });
+    if (!ideas.length) ideas.push({ name: 'Collation simple', time: '2 min', steps: 'Assemble les ingrédients dans un bol ou une boîte à emporter.' });
+    return ideas.slice(0, 4);
+  }
+  const eggsP = groups.prot.filter((f) => /œuf/i.test(f.name));
+  const P = names(groups.prot.filter((f) => !eggsP.includes(f))); const C = names(groups.carb); const V = names(groups.veg);
+  const EG = eggsP.length && P ? ` Ajoute ${names(eggsP)} au plat ou mollet(s) au moment de servir.` : '';
+  const F = groups.fat.find(isCookingFat) ? shortName(groups.fat.find(isCookingFat)) : "un filet d'huile";
   const roastable = groups.carb.some((f) => /patate|pomme de terre/i.test(f.name));
-  const raw = groups.prot.some((f) => /(cru|crue)$/i.test(f.name) || /steak|escalope|blanc de poulet|cabillaud|saumon cru|tofu/i.test(f.name));
+  const raw = groups.prot.some((f) => /(cru|crue)$/i.test(f.name) || /steak|escalope|blanc de poulet|tofu/i.test(f.name));
   const leafy = groups.veg.filter((f) => /épinard|salade|roquette|mâche/i.test(f.name));
-  const VR = list(groups.veg.filter((f) => !leafy.includes(f)).map(shortName)); const VL = list(leafy.map(shortName));
-  if (roastable) ideas.push({ name: 'Plaque au four', time: '35 min', steps: `Préchauffe le four à 200 °C. Coupe ${C}${VR ? ' et ' + VR : ''} en cubes, mélange avec ${F}, sel, paprika et ail. Enfourne 25 min${P ? `, ajoute ${P} en morceaux à mi-cuisson` : ''} et termine 10 à 12 min.${VL ? ` Sers sur un lit de ${VL}.` : ''}` });
-  if (P || C) ideas.push({ name: 'Bowl', time: '20 min', steps: `${C ? `Fais cuire ${C}. ` : ''}${P ? `Saisis ${P} à la poêle avec ${F}, 6 à 8 min${raw ? ' (bien cuit à cœur)' : ''}. ` : ''}${V ? `Ajoute ${V}, crus ou poêlés 3 min. ` : ''}Dresse dans un bol avec une sauce yaourt-citron ou soja-sésame.` });
-  if (P && V) ideas.push({ name: 'Poêlée express', time: '15 min', steps: `Coupe ${P} en lanières et fais-les revenir dans ${F}. Ajoute ${V}${C ? ` puis ${C} déjà cuit` : ''}, épices au choix (curry, herbes de Provence), 5 min à feu vif.` });
+  const VR = names(groups.veg.filter((f) => !leafy.includes(f))); const VL = names(leafy);
+  const eggs = has(/œuf/i); const wrap = has(/wrap|tortilla/i); const pasta = has(/pâtes|riz|quinoa|boulgour|semoule/i);
+  const fresh = has(/salade|tomate|concombre|carotte|poivron|avocat/i);
+  if (roastable) ideas.push({ name: 'Plaque au four', time: '35 min', steps: `Préchauffe le four à 200 °C. Coupe ${C}${VR ? ' et ' + VR : ''} en cubes, mélange avec ${F}, sel, paprika et ail. Enfourne 25 min${P ? `, ajoute ${P} en morceaux à mi-cuisson` : ''} et termine 10 à 12 min.${VL ? ` Sers sur un lit de ${VL}.` : ''}${EG}` });
+  if (P || C) ideas.push({ name: 'Bowl', time: '20 min', steps: `${C ? `Fais cuire ${C}. ` : ''}${P ? `Saisis ${P} à la poêle${raw ? `, 6 à 8 min, bien cuit à cœur` : ''}. ` : ''}${V ? `Ajoute ${V}, crus ou poêlés 3 min. ` : ''}Dresse dans un bol avec une sauce yaourt-citron ou soja-miel.${EG}` });
+  if (P && V) ideas.push({ name: 'Poêlée express', time: '15 min', steps: `Coupe ${P} en lanières et fais-les revenir dans ${F}. Ajoute ${V}${C ? ` puis ${C}` : ''}, épices au choix (curry, paprika fumé, herbes de Provence), 5 min à feu vif.` });
+  if (eggs.length) ideas.push({ name: 'Omelette garnie', time: '10 min', steps: `Bats ${names(eggs)} avec sel et poivre${V ? `, fais d'abord revenir ${V} 3 min` : ''}, verse les œufs et cuis à feu moyen.${C ? ` Sers avec ${C}.` : ''}` });
+  if (wrap.length) ideas.push({ name: 'Wraps', time: '10 min', steps: `Garnis ${names(wrap)} avec ${P || 'ta protéine'}${V ? `, ${V}` : ''} et une sauce fromage blanc-herbes, puis roule serré. Se mange chaud ou froid.` });
+  if (pasta.length && P) ideas.push({ name: 'Sauté façon wok', time: '15 min', steps: `Fais sauter ${P} à feu vif, ajoute ${V || 'des légumes'} puis ${names(pasta)} déjà cuit, avec 1 c. à soupe de sauce soja et de l'ail.` });
+  if (fresh.length && P) ideas.push({ name: 'Salade complète', time: '15 min', steps: `Cuis ${P}${C ? ` et ${C}` : ''}, laisse tiédir, puis mélange avec ${names(fresh)} et une vinaigrette moutarde-citron. Se prépare la veille.` });
   if (!ideas.length) ideas.push({ name: 'Assiette simple', time: '10 min', steps: 'Assemble les ingrédients, assaisonne, et complète avec ce qui te manque pour équilibrer le repas.' });
-  return ideas.slice(0, 2);
+  return ideas.slice(0, 4);
 }
 
 export function aiPrompt({ goalLabel, mealLabel, target, foods }) {
@@ -292,19 +330,19 @@ const TEMPLATES = {
   breakfast: [['Skyr nature', "Flocons d'avoine", 'Banane'], ['Œuf entier', 'Pain complet', 'Kiwi'], ['Fromage blanc 3 %', 'Granola', 'Fraises']],
   snack: [['Briochette', 'Skyr nature'], ['Skyr nature', 'Pomme', 'Amandes'], ['Barre protéinée', 'Banane'], ['Pain complet', 'Jambon blanc', 'Clémentine']],
   pre: [['Banane', 'Skyr nature'], ['Galette de riz soufflé', 'Blanc de dinde (tranches)', 'Compote sans sucre ajouté']],
-  post: [['Blanc de poulet cru', 'Riz basmati cuit', 'Brocoli cuit', "Huile d'olive"], ['Saumon cru', 'Patate douce crue', 'Haricots verts cuits'], ['Steak haché 5 % cru', 'Pâtes cuites', 'Courgette', "Huile d'olive"], ['Escalope de dinde crue', 'Quinoa cuit', 'Poêlée de légumes surgelés', "Huile d'olive"]],
+  post: [['Blanc de poulet cru', 'Riz basmati cuit', 'Brocoli cuit', "Huile d'olive"], ['Blanc de poulet cru', 'Patate douce crue', 'Haricots verts cuits', "Huile d'olive"], ['Tofu nature', 'Riz basmati cuit', 'Poêlée de légumes surgelés', "Huile d'olive"], ['Steak haché 5 % cru', 'Pâtes cuites', 'Courgette', "Huile d'olive"], ['Escalope de dinde crue', 'Quinoa cuit', 'Poêlée de légumes surgelés', "Huile d'olive"]],
   evening: [['Skyr nature', 'Framboises'], ['Fromage blanc 3 %', 'Noix'], ['Cottage cheese', 'Myrtilles']],
 };
 TEMPLATES.main = TEMPLATES.post;
-export function mealIdeas(role, target, foodByName, offset = 0, n = 2) {
-  const list = TEMPLATES[role] || TEMPLATES.main;
+export function mealIdeas(role, target, foodByName, offset = 0, n = 2, opts = {}) {
+  const list = (TEMPLATES[role] || TEMPLATES.main).filter((names) => !opts.noFish || !names.some((nm) => foodByName[nm] && isFish(foodByName[nm])));
   const out = [];
   for (let i = 0; i < Math.min(n, list.length); i++) {
     const names = list[(offset + i) % list.length];
     const foods = names.map((nm) => foodByName[nm]).filter(Boolean);
     const locks = {};
     for (const f of foods) if (f.portionG && roleOf(f) !== 'prot' && !/bol|tranche|portion|c\. à|poignée|verre|dose|pot/.test(f.portionName || '')) locks[f.id] = f.portionG;
-    out.push(buildPlate(foods, target, locks));
+    out.push(buildPlate(foods, target, locks, { sweet: ['breakfast', 'snack', 'pre', 'evening'].includes(role) }));
   }
   return out;
 }

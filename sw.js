@@ -1,9 +1,9 @@
 // Mode hors connexion : l'app reste utilisable à la salle même sans réseau.
 // Changer VERSION à chaque mise à jour pour que les téléphones récupèrent les nouveaux fichiers.
-const VERSION = 'v1.4.0';
+const VERSION = 'v1.5.0';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './app.css',
-  './app.js', './db.js', './seed.js', './score.js', './freedb.js', './nutrition.js', './foods.js',
+  './app.js', './db.js', './seed.js', './score.js', './freedb.js', './ideas.js', './nutrition.js', './foods.js',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png',
 ];
 
